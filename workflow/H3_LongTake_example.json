@@ -1,0 +1,515 @@
+{
+  "id": "1f0d3c2a-7b1e-4d6a-9c1f-0a2b4c6d8e10",
+  "revision": 0,
+  "last_node_id": 9,
+  "last_link_id": 8,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [
+        -900,
+        0
+      ],
+      "size": [
+        480,
+        90
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        -380,
+        0
+      ],
+      "size": [
+        450,
+        90
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        0.95
+      ]
+    },
+    {
+      "id": 3,
+      "type": "CLIPLoader",
+      "pos": [
+        -900,
+        140
+      ],
+      "size": [
+        480,
+        120
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader"
+      },
+      "widgets_values": [
+        "qwen3vl_32b_minimax_h3.safetensors",
+        "minimax",
+        "default"
+      ]
+    },
+    {
+      "id": 4,
+      "type": "VAELoader",
+      "pos": [
+        -900,
+        310
+      ],
+      "size": [
+        480,
+        70
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae_fp16.safetensors"
+      ]
+    },
+    {
+      "id": 5,
+      "type": "VAELoader",
+      "pos": [
+        -900,
+        420
+      ],
+      "size": [
+        480,
+        70
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "minimax_h3_audio_vae_fp32.safetensors"
+      ]
+    },
+    {
+      "id": 6,
+      "type": "LoadImage",
+      "pos": [
+        -900,
+        540
+      ],
+      "size": [
+        320,
+        380
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "title": "Identity -> <Picture 1>",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "example.png",
+        "image"
+      ]
+    },
+    {
+      "id": 9,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        -540,
+        540
+      ],
+      "size": [
+        620,
+        380
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "title": "PROMPT -> prompt_text",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveStringMultiline"
+      },
+      "widgets_values": [
+        "subject_definitions:\n<Subject 1> is the person whose complete visual identity comes from <Picture 1>.\n<Video 1> provides the full performance, body motion, posture changes, timing, rhythm, spatial trajectory, camera behavior and framing.\n\nsummary:\n[reference generation] <Subject 1> performs the complete action from <Video 1>. Identity, face, hair, styling and appearance stay those of <Picture 1> from the first to the last frame; motion, timing and camera follow <Video 1>.\n\nretention_analysis:\n<Subject 1> (appears throughout [Shot 1]): fully_preserved - Preserve the face, body appearance, proportions, styling, identity and overall visual presence defined by <Picture 1> throughout the complete sequence.\n<Video 1> (performance and temporal structure): attribute_transfer - Transfer the full body motion, pose flow, posture changes, timing, rhythm, spatial trajectory, camera movement and framing to <Subject 1>.\n\ndetailed_description:\nPhotorealistic cinematic video with stable character identity and natural continuous motion.\n\n[Shot 1] <Subject 1> performs the complete action from <Video 1>, following the same movement sequence, posture changes, pace and timing. Face, hair, silhouette and styling remain those of <Picture 1> from the beginning to the final frame."
+      ]
+    },
+    {
+      "id": 7,
+      "type": "H3LongTakeRender",
+      "pos": [
+        140,
+        0
+      ],
+      "size": [
+        520,
+        1000
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 3
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 4
+        },
+        {
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 5
+        },
+        {
+          "name": "ref_image_1",
+          "type": "IMAGE",
+          "shape": 7,
+          "link": 6
+        },
+        {
+          "name": "ref_image_2",
+          "type": "IMAGE",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "name": "ref_image_3",
+          "type": "IMAGE",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "name": "source_video",
+          "type": "IMAGE",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "name": "prompt_text",
+          "type": "STRING",
+          "shape": 7,
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "last_clip",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "project_dir",
+          "type": "STRING",
+          "links": [
+            8
+          ]
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3LongTakeRender"
+      },
+      "widgets_values": [
+        "(use source_video)",
+        "(prompt comes from prompt_text: this field is ignored while the socket is connected)",
+        "longtake",
+        896,
+        576,
+        124,
+        "22",
+        0,
+        "fixed",
+        4,
+        "euler",
+        "simple",
+        "continue",
+        0,
+        2,
+        true,
+        24.0,
+        false,
+        "match",
+        "match",
+        true,
+        10,
+        "source",
+        0.5,
+        0.0,
+        0.0,
+        "keyframe",
+        "reference",
+        "off"
+      ]
+    },
+    {
+      "id": 8,
+      "type": "H3LongTakeStitch",
+      "pos": [
+        720,
+        0
+      ],
+      "size": [
+        400,
+        260
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 2,
+      "title": "STITCH - Ctrl+M to unmute once all clips are rendered",
+      "inputs": [
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "name": "project_dir",
+          "type": "STRING",
+          "shape": 7,
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "path",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "report",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3LongTakeStitch"
+      },
+      "widgets_values": [
+        "longtake",
+        "longtake_final",
+        "(auto from project)",
+        0
+      ]
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      7,
+      0,
+      "MODEL"
+    ],
+    [
+      3,
+      3,
+      0,
+      7,
+      1,
+      "CLIP"
+    ],
+    [
+      4,
+      4,
+      0,
+      7,
+      2,
+      "VAE"
+    ],
+    [
+      5,
+      5,
+      0,
+      7,
+      3,
+      "VAE"
+    ],
+    [
+      6,
+      6,
+      0,
+      7,
+      4,
+      "IMAGE"
+    ],
+    [
+      7,
+      9,
+      0,
+      7,
+      9,
+      "STRING"
+    ],
+    [
+      8,
+      7,
+      1,
+      8,
+      1,
+      "STRING"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "1. RENDER - source_file, aspect=source; dry_run=true -> piano, poi max_clips=2 -> giunzione, poi max_clips=0",
+      "bounding": [
+        120,
+        -60,
+        560,
+        1080
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "2. STITCH - audio e progetto arrivano dal Render, nulla da impostare",
+      "bounding": [
+        700,
+        -60,
+        440,
+        340
+      ],
+      "color": "#b06634",
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
