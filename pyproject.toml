@@ -11,4 +11,4 @@ Repository = "https://github.com/mark9009/ComfyUI-H3-LongTake"
 [tool.comfy]
 PublisherId = "<your-publisher-id>"
 DisplayName = "H3 LongTake"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/mark9009/ComfyUI-H3-LongTake/main/examples/icon.png"
