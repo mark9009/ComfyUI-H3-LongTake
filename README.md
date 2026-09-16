@@ -70,8 +70,8 @@ The example workflows reference these file names; pick your own text-encoder fil
 
 ## Quick start
 
-1. Load `workflow/H3_LongTake_example.json` (motion + identity) or `workflow/H3_LongTake_style.json`
-   (style transfer / retexture).
+1. Load `workflow/H3_LongTake_example.json` (motion + identity), `workflow/H3_LongTake_character_swap.json`
+   (a picture's character performs the video) or `workflow/H3_LongTake_style.json` (style transfer / retexture).
 2. Put your source video in `ComfyUI/input/` and select it in `source_file`; connect your picture(s) to
    `ref_image_1..3`.
 3. Set `dry_run = true` and queue: the node prints the slicing plan (how many clips, how long).
