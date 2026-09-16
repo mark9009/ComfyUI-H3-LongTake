@@ -19,8 +19,8 @@ Depends on **ComfyUI core ≥ 0.34** only (no other node packs). Tested on a 16 
 ## Examples
 
 Source on the left, result on the right (8 s excerpts, 10 fps GIFs; full clips with audio in
-[`examples/video/`](examples/video/)). All rendered with `source_role = guide`, 4 Turbo steps,
-`context_frames = 5`, `seam_match = color`, on a 16 GB GPU.
+[`examples/video/`](examples/video/)). Style examples rendered with `source_role = guide`, the character swap
+with `source_role = reference`; 4 Turbo steps, `context_frames = 5`, `seam_match = color`, on a 16 GB GPU.
 
 | Pop-art from a swatch | Outfit retexture (text only) | GTA from a swatch |
 |---|---|---|
@@ -32,8 +32,13 @@ Source on the left, result on the right (8 s excerpts, 10 fps GIFs; full clips w
 | ![van gogh](examples/vangogh.gif) | ![ghibli](examples/ghibli.gif) | ![simpsons](examples/simpsons.gif) |
 | `… in the style of Vincent van Gogh: thick swirling impasto brushstrokes, visible paint texture…` | `… in the style of a Studio Ghibli anime film: hand-drawn 2D animation look, soft clean linework…` | `… in the style of The Simpsons cartoon: flat 2D cel animation, thick clean black outlines, yellow skin…` |
 
+| Character swap (`reference`, no StyleTransfer LoRA) | | |
+|---|---|---|
+| ![character swap](examples/charswap.gif) | <img src="examples/ref_charswap.jpg" width="180" alt="reference"> | `<Video 1> provides the full performance, motion, timing, camera distance and framing. Replace the dancer with the woman from <Picture 1>: long dark brown wavy hair, thick eyebrows, a fitted glossy red latex mini dress, silver bangles and rings, photorealistic. Keep the room, lighting, sofa and background exactly as in <Video 1>; do not use the graffiti wall or neon lights from <Picture 1>.` |
+
 Full prompts in the [use-case table](#use-cases-all-tested-prompts-verbatim) below. The dancer and press-conference
-clips are free [Pexels](https://www.pexels.com/) videos (no audio track on the dancer clip); the cave clip is a film excerpt.
+clips are free [Pexels](https://www.pexels.com/) videos (no audio track on the dancer clip); the cave clip is a film excerpt;
+the character-swap reference is an AI-generated picture.
 
 ---
 
@@ -112,6 +117,10 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 | case | `<Picture 1>` | prompt | result |
 |---|---|---|---|
 | **Motion + identity** (Ref2VA, `source_role = reference`) | photo of the person, same framing as the video | see `workflow/H3_LongTake_example.json` | the person of the picture performs the video; seam 0.96, motion correlation 0.57 |
+| **Character swap, photoreal** (`reference`, no StyleTransfer LoRA; dancer clip, 10 s, 2 clips) | full-body AI photo of a woman in front of a graffiti wall | `<Video 1> provides the full performance, motion, timing, camera distance and framing. Replace the dancer with the woman from <Picture 1>: long dark brown wavy hair, thick eyebrows, a fitted glossy red latex mini dress, silver bangles and rings, photorealistic. Keep the room, lighting, sofa and background exactly as in <Video 1>; do not use the graffiti wall or neon lights from <Picture 1>.` | identity faithful (face, dress, bangles), room kept, the picture's graffiti wall and neon excluded by the text constraint alone; motion lag −2 frames, frame similarity 0.86 |
+| **Character swap, anime** (`reference`) | full-body 3D render of an anime character, neutral background | same structure, character described in words (`an anime girl with long orange hair and blue flower hairpins, white cropped top with a mint collar, long white skirt, barefoot, cel-shaded anime look`) | faithful character, room and framing kept; motion follows loosely (correlation 0.60, lag +12 frames) |
+| **Character swap with `guide+reference`** + StyleTransfer LoRA | same pictures | `style_transfer: Re-render this video replacing the dancer with the character of <Picture 1>: … Keep the original room, background, framing and motion exactly as in the video; do not add …` | motion and timing exact (lag 0, similarity constant across clips) but the face is more generic and the look more "3D render"; +25 % time. Use it only when pose-by-pose sync matters |
+| **Character swap with `guide` alone** + LoRA | same | same | **do not**: clip 0 barely changes, clip 1 jumps to the character — the LoRA alone carries no identity |
 | **Pop-art from an image** | synthetic halftone swatch, no figures | `style_transfer: Re-render this video with the style of <Picture 1>: bold graphic style, vibrant flat colours, clean black outlines, flat shading, halftone dots.` | style applied, room and people of the video kept; seam ΔE 0.9 |
 | **Outfit retexture** (`guide_retexture`) | none | `retexture: change the dress to red glossy latex, keeping face, hair, background and motion unchanged.` | only the garment changes, consistent across clips; ΔE 3.4. Name the exact garment ("the dress", not "the outfit") |
 | **GTA from text** | none | `style_transfer: Re-render this video in the style of GTA V cover artwork: cel-shaded comic illustration, thick dark outlines, flat saturated colours, hard-edged shadows, glossy highlights. Keep the original indoor room, furniture and background exactly as in the video; do not add any new scenery.` | works; without the last sentence the model may invent a city skyline; "loading screen" in the prompt adds HUD boxes |
@@ -133,6 +142,12 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 - **Style images without faces or scenery**: crop a swatch (fabric, shading, palette) if needed. Pictures with
   prominent figures transfer identity.
 - `retexture:` changes material/colour of one item while keeping motion — no masks needed. Name the exact item.
+- **Character swap: use `reference`**, describe the character in words as well as `<Picture 1>` (hair, outfit,
+  accessories, art style), and if the reference photo has a recognisable background forbid it explicitly
+  ("do not use the graffiti wall or neon lights from `<Picture 1>`"). A photo framed like the video (full body vs
+  full body) keeps the motion nearly in sync; a different framing tends to win over the video after 1–2 s.
+- A ready-made system prompt for an LLM that writes these prompts from a plain request is in
+  [`docs/PROMPTING.md`](docs/PROMPTING.md).
 
 ---
 
@@ -148,7 +163,7 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 | `source_video` / `source_fps` / `source_audio` | alternative: IMAGE batch, only for short tests (float32 ≈ 6 MB/frame) |
 | `ref_image_1..3` | `<Picture N>` |
 | `prompt` / `prompt_text` | use `<Video 1>` and `<Picture N>` (Ref2VA) or the `style_transfer:` / `retexture:` templates (guide). `prompt_text` is a socket for an external text node and, when connected, replaces the field. Changing `source_role` fills the field with the role's template unless you already wrote your own |
-| `source_role` | `reference` (default): the slice is `<Video 1>`, a motion suggestion. `guide`: the slice is a guide latent anchored at frame 0 for the whole clip — frame-accurate motion and framing, for the StyleTransfer LoRA with `<Picture 1>` = style. `guide_retexture`: like guide, text-only `retexture:` template. `guide+reference`: both (measured: no gain, +50 % time) |
+| `source_role` | `reference` (default): the slice is `<Video 1>`, a motion suggestion. `guide`: the slice is a guide latent anchored at frame 0 for the whole clip — frame-accurate motion and framing, for the StyleTransfer LoRA with `<Picture 1>` = style. `guide_retexture`: like guide, text-only `retexture:` template. `guide+reference`: both — for style transfer no gain (+50 % time); for a character swap it gives exact motion at the cost of identity |
 | `aspect` / `megapixels` | output canvas: `source` = the source's aspect ratio (default). A canvas with a different aspect makes H3 copy `<Video 1>` and ignore `<Picture 1>`. `width`/`height` only count with `manual` |
 | `clip_frames` | 124 = 5.2 s (default), 243 = 10.1 s. Longer clips ≈ proportionally longer sampling |
 | `context_frames` | **5** (default): clean seam and reference adherence equal to no anchor. 22: longer anchor, measured worse for adherence. Every clip yields L−C new frames |
