@@ -533,7 +533,7 @@
   "groups": [
     {
       "id": 1,
-      "title": "1. RENDER - source_file, aspect=source; dry_run=true -> piano, poi max_clips=2 -> giunzione, poi max_clips=0",
+      "title": "1. RENDER - source_file, aspect=source; dry_run=true -> plan, then max_clips=2 -> check the seam, then max_clips=0",
       "bounding": [
         120,
         -60,
@@ -545,7 +545,7 @@
     },
     {
       "id": 2,
-      "title": "2. STITCH - audio e progetto arrivano dal Render, nulla da impostare",
+      "title": "2. STITCH - audio and project come from the Render, nothing to set",
       "bounding": [
         700,
         -60,
