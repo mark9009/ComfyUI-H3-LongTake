@@ -17,4 +17,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Comfy-Org/publish-node-action@main
         with:
-          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}
+          personal_access_token: ${{ secrets.MARK9009 }}
