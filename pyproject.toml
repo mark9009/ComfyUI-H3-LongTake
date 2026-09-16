@@ -9,6 +9,6 @@ dependencies = []
 Repository = "https://github.com/mark9009/ComfyUI-H3-LongTake"
 
 [tool.comfy]
-PublisherId = "<your-publisher-id>"
+PublisherId = "mark9009"
 DisplayName = "H3 LongTake"
 Icon = "https://raw.githubusercontent.com/mark9009/ComfyUI-H3-LongTake/main/examples/icon.png"
