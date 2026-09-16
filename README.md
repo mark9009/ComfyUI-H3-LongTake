@@ -44,6 +44,9 @@ the character-swap reference is an AI-generated picture.
 
 ## Installation
 
+**ComfyUI-Manager**: Custom Nodes Manager → search *H3 LongTake* → Install (or *Install via Git URL* with the
+address below). Manually:
+
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/mark9009/ComfyUI-H3-LongTake

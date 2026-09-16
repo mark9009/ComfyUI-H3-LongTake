@@ -1,0 +1,4 @@
+# kept out of the registry package (they stay on GitHub)
+examples/
+tools/
+.github/
