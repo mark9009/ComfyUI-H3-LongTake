@@ -85,8 +85,22 @@ Graph: `UNETLoader` (Viggle) → `LoraLoaderModelOnly` (DMD r64, 1.0) → `Model
 → `model`; `Load Text Conditioning (Viggle)` → `text_cond`; `ref_image_1` = the character; leave `clip`
 unconnected. Sampling: `steps 3`, `euler`, `scheduler simple` reproduces the upstream 4-point sigmas exactly
 (`1, 0.857, 0.6, 0`); 5 and 7 steps are Viggle's "balanced"/"quality" presets. The report prints the actual
-sigmas. The still should match the video's pose and framing (Viggle suggests a repainted source frame); the
-finetune does not lip-sync and loses the identity when the subject leaves and re-enters the frame.
+sigmas. **The still must contain only the character on a flat background**: connect `ref_mask_1` (a rembg node
+upstream) and the Render does the compositing. Measured: with the original still (graffiti wall) Viggle copies the
+wall into the video; with two people in the still (subject pasted onto a source frame) it regenerates the video's
+person and ignores the character. The finetune does not lip-sync and loses the identity when the subject leaves
+and re-enters the frame.
+
+Measurements (Pexels dancer, 10 s, 2 clips, seed 0, 544×960, keyframe 5, seam color):
+
+| engine | lag | motion corr. | frame sim | seam jump | time |
+|---|---|---|---|---|---|
+| base H3 + Turbo 4 steps, prompt "keep the room" | −1 / −3 | 0.53 / 0.58 | 0.86 | 0.018 | ~8 min |
+| Viggle 3 steps, original still | 0 / 0 | 0.81 / 0.73 | 0.58 (background imported) | 0.016 | 7.3 min |
+| **Viggle 3 steps + `ref_mask_1`** | **0 / 0** | **0.76 / 0.68** | **0.86** | **0.009** | 7.3 min |
+
+`inpaint` anchoring ≡ `keyframe` with Viggle too (seam 0.0155 vs 0.0158). Viggle's own chunked sampler on the
+same footage: 4.3 min per 124-frame window (it re-decodes everything at the end) vs 3.65 for the Render.
 
 ---
 
@@ -184,6 +198,7 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 | `start_seconds` / `end_seconds` | range of the source to use (0 = all). Cut useless tails such as TikTok end cards; the Stitch takes the audio from the same point |
 | `source_video` / `source_fps` / `source_audio` | alternative: IMAGE batch, only for short tests (float32 ≈ 6 MB/frame) |
 | `ref_image_1..3` | `<Picture N>` |
+| `ref_mask_1` | subject mask of `ref_image_1` (1 = subject, e.g. a rembg node's output): the still is composited on a flat background of the source's first-frame mean colour, so its scenery does not end up in the video. With Viggle it is the only way (no prompt); measured: a still with a graffiti wall → graffiti in the video; with the mask → the video's room is kept |
 | `prompt` / `prompt_text` | use `<Video 1>` and `<Picture N>` (Ref2VA) or the `style_transfer:` / `retexture:` templates (guide). `prompt_text` is a socket for an external text node and, when connected, replaces the field. Changing `source_role` fills the field with the role's template unless you already wrote your own |
 | `source_role` | `reference` (default): the slice is `<Video 1>`, a motion suggestion. `guide`: the slice is a guide latent anchored at frame 0 for the whole clip — frame-accurate motion and framing, for the StyleTransfer LoRA with `<Picture 1>` = style. `guide_retexture`: like guide, text-only `retexture:` template. `guide+reference`: both — for style transfer no gain (+50 % time); for a character swap it gives exact motion at the cost of identity |
 | `aspect` / `megapixels` | output canvas: `source` = the source's aspect ratio (default). A canvas with a different aspect makes H3 copy `<Video 1>` and ignore `<Picture 1>`. `width`/`height` only count with `manual` |

@@ -274,6 +274,22 @@ def _viggle_canvas(w, h, short_edge, max_pixels=None):
 VIGGLE_PROMPT = "(Viggle-Animate: frozen embedding, prompt ignored)"
 
 
+def _cutout_on_flat(image, mask, color):
+    """Subject (mask=1) on a flat `color` background (r, g, b in 0..1): the
+    reference still without its scenery. Measured with Viggle: the still's
+    background gets copied into the video; a flat one keeps the video's room."""
+    img = image[:1, ..., :3]
+    m = mask
+    if m.ndim == 2:
+        m = m[None]
+    m = m[:1].float()
+    if tuple(m.shape[-2:]) != tuple(img.shape[1:3]):
+        m = torch.nn.functional.interpolate(m[None], size=img.shape[1:3], mode="bilinear", align_corners=False)[0]
+    m = m.clamp(0, 1)[..., None].to(img)
+    bg = torch.tensor(color, dtype=img.dtype, device=img.device).view(1, 1, 1, 3)
+    return img * m + bg * (1 - m)
+
+
 def _take_source_frames(frames, source_fps, start, length):
     """Source slice resampled to 24 fps by index; past the end it repeats the
     last frame (frozen tail of the last clip)."""
@@ -952,6 +968,9 @@ class H3LongTakeRender:
                 "ref_image_1": ("IMAGE",),
                 "ref_image_2": ("IMAGE",),
                 "ref_image_3": ("IMAGE",),
+                "ref_mask_1": ("MASK", {"tooltip": "Subject mask of ref_image_1 (1 = subject, e.g. a rembg node's output): the still is "
+                                                    "composited on a flat background of the source's mean colour, so its scenery does not "
+                                                    "end up in the video. With Viggle it is the only way (no prompt)."}),
                 "source_video": ("IMAGE", {"tooltip": "Alternative to source_file for short tests: IMAGE batch (float32, ~6 MB/frame at 0.5 MP)."}),
                 "source_fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.001,
                                          "tooltip": "Real FPS of source_video (ignored with source_file)."}),
@@ -1026,7 +1045,7 @@ class H3LongTakeRender:
     def render(self, model, vae, audio_vae, source_file, prompt, project_name,
                width, height, clip_frames, context_frames, seed, steps, sampler_name, scheduler,
                mode, redo_from_clip, max_clips, dry_run,
-               clip=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
+               clip=None, ref_image_1=None, ref_image_2=None, ref_image_3=None, ref_mask_1=None,
                source_video=None, source_fps=24.0, source_audio=None, use_source_audio=False,
                ref_image_size="match", ref_video_size="match", audio_context=True, chunk_crf=10,
                aspect="source", megapixels=0.5, prompt_text=None, start_seconds=0.0, end_seconds=0.0,
@@ -1154,6 +1173,11 @@ class H3LongTakeRender:
 
         # --- image references: encoded once ------------------------------------
         image_items, image_blocks = [], []
+        if ref_image_1 is not None and ref_mask_1 is not None:
+            flat = source.frames_at(0, 1, 64, 64).mean(dim=(0, 1, 2)).tolist()
+            ref_image_1 = _cutout_on_flat(ref_image_1, ref_mask_1, flat)
+            report_lines.append("ref_image_1: subject cut out with ref_mask_1 on a flat background "
+                                f"({', '.join(f'{v:.2f}' for v in flat)})")
         for img in ((ref_image_1,) if viggle else (ref_image_1, ref_image_2, ref_image_3)):
             if img is None:
                 continue

@@ -42,6 +42,7 @@ def fake_sample(model, positive, latent, seed, sampler_name, scheduler, steps, n
         "keyframes": extra.get("minimax_keyframes"),
         "refs": [r["kind"] for r in extra["minimax_refs"]],
         "items": [it["type"] for it in extra["tokens"]["items"]] if "tokens" in extra else None,
+        "item_data": [it.get("data") for it in extra["tokens"]["items"]] if "tokens" in extra else None,
         "cross": positive[0][0], "tags": extra.get("minimax_token_tags"),
     })
     v = torch.zeros_like(video); v[0, 0, -1, 0, 0] = seed  # marks the last token with the seed
@@ -341,3 +342,14 @@ calls.clear()
 node.render(mode="restart", **{**common, "project_name": "loop_viggle2", "max_clips": 1})
 assert calls[0]["refs"] == ["image", "video"] and calls[0]["items"] == ["image", "video"]
 print("viggle ok")
+
+# --- ref_mask_1: subject on a flat background (mean colour of the source's first frame) ---
+calls.clear()
+mask = torch.zeros(1, 200, 160); mask[:, 60:140, 40:120] = 1.0
+r = node.render(mode="restart", **{**common, "project_name": "loop_mask", "max_clips": 1, "ref_mask_1": mask})
+assert "cut out with ref_mask_1" in r["result"][2]
+data = calls[0]["item_data"][0]           # the reference image as the model sees it
+flat = src[0].mean(dim=(0, 1))
+assert torch.allclose(data[0, 0, 0], flat, atol=0.02) and torch.allclose(data[0, -1, -1], flat, atol=0.02), (data[0, 0, 0], flat)
+assert not torch.allclose(data[0, data.shape[1] // 2, data.shape[2] // 2], flat, atol=0.02)  # the centre is the photo
+print("mask ok")
