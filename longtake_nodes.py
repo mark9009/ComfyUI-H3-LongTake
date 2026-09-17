@@ -256,6 +256,24 @@ def _ref_image_canvas(w, h, mode, out_w, out_h):
     return _snap32(w * scale, h * scale)
 
 
+def _viggle_canvas(w, h, short_edge, max_pixels=None):
+    """Viggle-Animate canvas (diffusers resolve_canvas_size): short edge at
+    `short_edge`, optional area cap, multiples of 32. Upscaling included: this
+    is how the finetune saw its image and video references."""
+    ratio = w / float(h)
+    if ratio >= 1.0:
+        nw, nh = short_edge * ratio, float(short_edge)
+    else:
+        nw, nh = float(short_edge), short_edge / ratio
+    if max_pixels is not None and nw * nh > max_pixels:
+        sc = math.sqrt(max_pixels / (nw * nh))
+        nw, nh = nw * sc, nh * sc
+    return _snap32(nw, nh)
+
+
+VIGGLE_PROMPT = "(Viggle-Animate: frozen embedding, prompt ignored)"
+
+
 def _take_source_frames(frames, source_fps, start, length):
     """Source slice resampled to 24 fps by index; past the end it repeats the
     last frame (frozen tail of the last clip)."""
@@ -896,7 +914,6 @@ class H3LongTakeRender:
         return {
             "required": {
                 "model": ("MODEL",),
-                "clip": ("CLIP",),
                 "vae": ("VAE",),
                 "audio_vae": ("VAE",),
                 "source_file": (_list_input_videos(), {"video_upload": True,
@@ -930,6 +947,8 @@ class H3LongTakeRender:
                 "dry_run": ("BOOLEAN", {"default": False, "tooltip": "Only shows the slicing plan, does not generate."}),
             },
             "optional": {
+                "clip": ("CLIP", {"tooltip": "The base model's Qwen: encodes prompt and references. "
+                                             "Not needed with text_cond (Viggle-Animate)."}),
                 "ref_image_1": ("IMAGE",),
                 "ref_image_2": ("IMAGE",),
                 "ref_image_3": ("IMAGE",),
@@ -971,6 +990,11 @@ class H3LongTakeRender:
                                "tooltip": "At the seam with the previous clip, corrects the first 24 frames towards the previous clip's "
                                           "last frames: color = luminance + hue (measured: dE 5.8 -> 0.9), "
                                           "luminance = exposure only. Pixels only, after decoding; the latent is untouched."}),
+                "text_cond": ("TEXT_COND", {"tooltip": "Viggle-Animate frozen embedding (node 'Load Text Conditioning (Viggle)'). "
+                                                        "When connected: model = Viggle finetune (character replacement), no Qwen, "
+                                                        "prompt ignored, references video->image as in the finetune, ref_image_1 only; "
+                                                        "source_role must be reference. Recommended: steps 3, scheduler simple, "
+                                                        "ModelSamplingMiniMaxH3 shift 3/3 upstream (= upstream sigmas 1, .857, .6, 0)."}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -999,24 +1023,38 @@ class H3LongTakeRender:
 
     # ------------------------------------------------------------------
 
-    def render(self, model, clip, vae, audio_vae, source_file, prompt, project_name,
+    def render(self, model, vae, audio_vae, source_file, prompt, project_name,
                width, height, clip_frames, context_frames, seed, steps, sampler_name, scheduler,
                mode, redo_from_clip, max_clips, dry_run,
-               ref_image_1=None, ref_image_2=None, ref_image_3=None,
+               clip=None, ref_image_1=None, ref_image_2=None, ref_image_3=None,
                source_video=None, source_fps=24.0, source_audio=None, use_source_audio=False,
                ref_image_size="match", ref_video_size="match", audio_context=True, chunk_crf=10,
                aspect="source", megapixels=0.5, prompt_text=None, start_seconds=0.0, end_seconds=0.0,
                anchor_mode="keyframe", source_role="reference", seam_match="off",
-               api_prompt=None, extra_pnginfo=None):
+               text_cond=None, api_prompt=None, extra_pnginfo=None):
 
         if source_role not in SOURCE_ROLES:
             raise ValueError(f"H3 LongTake: unknown source_role: {source_role}")
+        # Viggle-Animate: ref2va finetune for character replacement, frozen text
+        # embedding instead of Qwen; refs [video, image] as in the finetune
+        viggle = text_cond is not None
+        if viggle:
+            if not (isinstance(text_cond, dict) and "prompt_embeds" in text_cond and "text_token_tags" in text_cond):
+                raise ValueError("H3 LongTake: text_cond must come from the 'Load Text Conditioning (Viggle)' node.")
+            if source_role != "reference":
+                raise ValueError("H3 LongTake: with text_cond (Viggle-Animate) the slice is always <Video 1>: use source_role=reference.")
+            if ref_image_1 is None:
+                raise ValueError("H3 LongTake: Viggle-Animate needs ref_image_1 (the character to put into the video).")
+        elif clip is None:
+            raise ValueError("H3 LongTake: connect clip (or text_cond for the Viggle-Animate model).")
         use_guide = source_role.startswith("guide")
         use_ref_video = source_role in ("reference", "guide+reference")
         if isinstance(prompt_text, str) and prompt_text.strip():
             prompt = prompt_text
         template_used = False
-        if not str(prompt).strip():
+        if viggle:
+            prompt = VIGGLE_PROMPT
+        elif not str(prompt).strip():
             prompt, template_used = PROMPT_TEMPLATES[source_role], True
         if use_guide and not use_ref_video and "<Video 1>" in prompt:
             raise ValueError("H3 LongTake: with source_role=guide the video is not a reference: remove <Video 1> from the prompt "
@@ -1042,7 +1080,23 @@ class H3LongTakeRender:
         ]
         if template_used:
             report_lines.append(f"empty prompt: using the {source_role} template: {prompt}")
-        if n_refs == 0:
+        if viggle:
+            try:
+                sig = comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, int(steps))
+                sig_txt = ", ".join(f"{float(v):.3f}" for v in sig)
+            except Exception as exc:  # fake model in the tests
+                sig_txt = f"not computable ({exc})"
+            report_lines.append(f"Viggle-Animate: prompt ignored (frozen embedding), references video->image; "
+                                f"sigmas ({scheduler}, {int(steps)} steps): {sig_txt}")
+            if scheduler != "simple" or int(steps) not in (3, 5, 7):
+                report_lines.append("WARNING: the upstream Viggle preset is scheduler simple with 3/5/7 steps "
+                                    "and ModelSamplingMiniMaxH3 shift 3/3 upstream (sigma 3t/(1+2t)).")
+            if n_refs > 1:
+                report_lines.append("WARNING: Viggle-Animate uses a single image: ref_image_2/3 ignored.")
+            if use_source_audio:
+                report_lines.append("WARNING: Viggle-Animate has no <Audio 1>: use_source_audio ignored.")
+                use_source_audio = False
+        elif n_refs == 0:
             report_lines.append("WARNING: no reference image connected, <Picture N> in the prompt has no effect.")
 
         placeholder = torch.zeros(1, 64, 64, 3)
@@ -1058,6 +1112,8 @@ class H3LongTakeRender:
             "source": source.label, "overlap": 0 if before else C,
             "source_role": source_role,
         }
+        if viggle:
+            signature["engine"] = "viggle"
         previous = _load_plan(project_dir)
         if mode == "restart":
             removed = _delete_clips_from(project_dir, 0)
@@ -1098,17 +1154,25 @@ class H3LongTakeRender:
 
         # --- image references: encoded once ------------------------------------
         image_items, image_blocks = [], []
-        for img in (ref_image_1, ref_image_2, ref_image_3):
+        for img in ((ref_image_1,) if viggle else (ref_image_1, ref_image_2, ref_image_3)):
             if img is None:
                 continue
             h, w = int(img.shape[1]), int(img.shape[2])
-            tw, th = _ref_image_canvas(w, h, ref_image_size, width, height)
+            if viggle:
+                # as in the finetune: short edge of the output canvas, no area cap
+                tw, th = _viggle_canvas(w, h, min(int(width), int(height)))
+            else:
+                tw, th = _ref_image_canvas(w, h, ref_image_size, width, height)
             resized = _resize(img[:1], tw, th)
             z = vae.encode(resized)
             image_items.append({"type": "image", "data": resized})
             image_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": z})
 
-        cw, ch = _ref_video_canvas(source.width, source.height, ref_video_size, width, height)
+        if viggle:
+            # the reference video sits on the output canvas (target short edge and area)
+            cw, ch = _viggle_canvas(source.width, source.height, min(int(width), int(height)), int(width) * int(height))
+        else:
+            cw, ch = _ref_video_canvas(source.width, source.height, ref_video_size, width, height)
         if use_ref_video:
             report_lines.append(f"source {source.label}; <Video 1> at {cw}x{ch}")
         if use_guide:
@@ -1194,12 +1258,18 @@ class H3LongTakeRender:
             # With the DiT resident in VRAM the 25 GB Qwen can only stream from
             # RAM: the encode goes from ~1 min to ~10 min (measured). Evicting
             # costs nothing, the weights stay staged in RAM and are back in a second.
-            if i > 0:
-                comfy.model_management.unload_all_models()
-                comfy.model_management.soft_empty_cache()
-            tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
-            positive = clip.encode_from_tokens_scheduled(tokens)
-            positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": ref_blocks})
+            if viggle:
+                # the finetune's frozen order: video first, then the picture
+                ref_blocks = ref_blocks[len(image_blocks):] + ref_blocks[:len(image_blocks)]
+                positive = [[text_cond["prompt_embeds"], {"minimax_refs": ref_blocks,
+                                                          "minimax_token_tags": text_cond["text_token_tags"]}]]
+            else:
+                if i > 0:
+                    comfy.model_management.unload_all_models()
+                    comfy.model_management.soft_empty_cache()
+                tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
+                positive = clip.encode_from_tokens_scheduled(tokens)
+                positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": ref_blocks})
 
             latent = _empty_av_latent(int(width), int(height), length)
             target_video, _ = _split_av(latent["samples"])

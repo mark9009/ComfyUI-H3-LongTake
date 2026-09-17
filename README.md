@@ -69,6 +69,25 @@ the PATH. No other Python dependency.
 
 The example workflows reference these file names; pick your own text-encoder file in the `CLIPLoader`.
 
+### Optional: Viggle-Animate engine (character replacement without a prompt)
+
+[Viggle-Animate](https://huggingface.co/Viggle/Viggle-Animate) is a full finetune of H3's ref2va for
+*character replacement*: the same job as `reference` + `<Picture 1>`, but trained for it and without a text
+encoder (one frozen 362-token embedding). The Render can drive it: the plan, slices, anchors, seam match,
+Stitch and audio stay LongTake's; only the conditioning changes.
+
+Install [ComfyUI-Viggle-Animate-H3](https://github.com/Saganaki22/ComfyUI-Viggle-Animate-H3) (for the
+**Load Text Conditioning (Viggle)** node) and from [drbaph/Viggle-Animate-ComfyUI](https://huggingface.co/drbaph/Viggle-Animate-ComfyUI):
+`diffusion_models/minimax_h3_ref2va_viggle_pruned_int8_convrot.safetensors` (21 GB, same class as the base
+pruned fp8), `loras/viggle_animate_dmd_lora_r64.safetensors`, `text_cond/fixed_embed_fwd_anyframe.safetensors`.
+
+Graph: `UNETLoader` (Viggle) → `LoraLoaderModelOnly` (DMD r64, 1.0) → `ModelSamplingMiniMaxH3` (shift **3 / 3**)
+→ `model`; `Load Text Conditioning (Viggle)` → `text_cond`; `ref_image_1` = the character; leave `clip`
+unconnected. Sampling: `steps 3`, `euler`, `scheduler simple` reproduces the upstream 4-point sigmas exactly
+(`1, 0.857, 0.6, 0`); 5 and 7 steps are Viggle's "balanced"/"quality" presets. The report prints the actual
+sigmas. The still should match the video's pose and framing (Viggle suggests a repainted source frame); the
+finetune does not lip-sync and loses the identity when the subject leaves and re-enters the frame.
+
 ---
 
 ## Quick start
@@ -160,7 +179,7 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 
 | input | notes |
 |---|---|
-| `model`, `clip`, `vae`, `audio_vae` | LoRAs already applied to `model` |
+| `model`, `clip`, `vae`, `audio_vae` | LoRAs already applied to `model`. `clip` is optional only with `text_cond` |
 | `source_file` | video in `input/`; ffmpeg decodes only each clip's slice |
 | `start_seconds` / `end_seconds` | range of the source to use (0 = all). Cut useless tails such as TikTok end cards; the Stitch takes the audio from the same point |
 | `source_video` / `source_fps` / `source_audio` | alternative: IMAGE batch, only for short tests (float32 ≈ 6 MB/frame) |
@@ -177,6 +196,7 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 | `dry_run` | print the plan only |
 | `use_source_audio` | source audio as `<Video 1>`'s soundtrack (lip-sync; costs tokens) |
 | `ref_video_size` | `match` (default): `<Video 1>` scaled to the output area · `native`: the core node's 768 canvas |
+| `text_cond` | **Viggle-Animate engine** (see below): when connected the node uses the frozen embedding instead of `clip`, ignores `prompt`, orders the references as the finetune does (video → image) and uses `ref_image_1` only. Requires `source_role=reference` |
 
 Outputs: `last_clip`, `project_dir`, `report`. The node shows a preview of every chunk present (`preview.mp4`,
 no audio) and the plan.

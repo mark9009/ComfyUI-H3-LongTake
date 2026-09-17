@@ -41,7 +41,8 @@ def fake_sample(model, positive, latent, seed, sampler_name, scheduler, steps, n
         "seed": seed, "T": video.shape[2], "noise_mask": noise_mask, "latent_video": video.clone(),
         "keyframes": extra.get("minimax_keyframes"),
         "refs": [r["kind"] for r in extra["minimax_refs"]],
-        "items": [it["type"] for it in extra["tokens"]["items"]],
+        "items": [it["type"] for it in extra["tokens"]["items"]] if "tokens" in extra else None,
+        "cross": positive[0][0], "tags": extra.get("minimax_token_tags"),
     })
     v = torch.zeros_like(video); v[0, 0, -1, 0, 0] = seed  # marks the last token with the seed
     return comfy.nested_tensor.NestedTensor((v, torch.zeros_like(audio)))
@@ -312,3 +313,31 @@ print("meta ok")
 st = m.H3LongTakeStitch().stitch("never_rendered", "never_final", audio_file=m.AUDIO_NONE)
 assert st["result"][0] == "" and "nothing to stitch" in st["result"][1], st
 print("stitch-empty ok")
+
+# --- Viggle-Animate: text_cond instead of clip, refs video->image, prompt ignored ---
+calls.clear()
+tc = {"prompt_embeds": torch.zeros(1, 362, 8), "text_token_tags": torch.arange(362)}
+vig = {**common, "project_name": "loop_viggle", "max_clips": 2, "context_frames": "5", "prompt": "any text",
+       "ref_image_2": ref, "use_source_audio": True, "source_audio": {"waveform": torch.zeros(1, 2, 48000 * 13), "sample_rate": 48000},
+       "text_cond": tc, "steps": 3}
+del vig["clip"]
+r = node.render(mode="restart", **vig)
+rep = r["result"][2]
+assert "Viggle-Animate" in rep and "ref_image_2/3 ignored" in rep and "use_source_audio ignored" in rep, rep
+assert len(calls) == 2 and calls[0]["refs"] == ["video", "image"] and calls[0]["items"] is None
+assert calls[0]["cross"] is tc["prompt_embeds"] and calls[0]["tags"] is tc["text_token_tags"]
+assert calls[1]["keyframes"] is not None and calls[1]["keyframes"][0]["latent"].shape[2] == 2  # 5-frame anchor
+plan = json.load(open(os.path.join(r["result"][1], "plan.json")))
+assert plan["signature"]["engine"] == "viggle" and plan["prompt_hash"] != ""
+for bad, msg in (({**vig, "source_role": "guide"}, "source_role=reference"),
+                 ({**vig, "ref_image_1": None}, "ref_image_1"),
+                 ({**common, "clip": None}, "connect clip")):
+    try:
+        node.render(mode="restart", **bad); raise AssertionError("error expected")
+    except ValueError as e:
+        assert msg in str(e), str(e)
+# without text_cond everything as before (clip used, image->video order)
+calls.clear()
+node.render(mode="restart", **{**common, "project_name": "loop_viggle2", "max_clips": 1})
+assert calls[0]["refs"] == ["image", "video"] and calls[0]["items"] == ["image", "video"]
+print("viggle ok")
