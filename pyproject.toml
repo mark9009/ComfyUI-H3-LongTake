@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-h3-longtake"
 description = "Long MiniMax H3 videos clip by clip with continuity: motion/identity transfer (Ref2VA) and style transfer / retexture (guide latent + StyleTransfer LoRA), resumable, one clip in VRAM at a time."
-version = "1.0.0"
+version = "1.0.1"
 license = { file = "LICENSE" }
 dependencies = []
 

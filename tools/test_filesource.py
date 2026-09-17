@@ -3,7 +3,10 @@ COMFY = os.environ.get("COMFY_DIR", os.path.abspath(os.path.join(os.path.dirname
 sys.path.insert(0, COMFY)
 os.chdir(COMFY)
 import torch, importlib
-m = importlib.import_module("custom_nodes.ComfyUI-H3-LongTake.longtake_nodes")
+# load the pack this test ships with (not whatever copy is installed under custom_nodes)
+import importlib.util
+_spec = importlib.util.spec_from_file_location("longtake_nodes", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "longtake_nodes.py"))
+m = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(m)
 ff = m._find_ffmpeg()
 tmp = tempfile.mkdtemp()
 

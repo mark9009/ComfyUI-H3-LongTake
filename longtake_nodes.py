@@ -1356,7 +1356,12 @@ class H3LongTakeStitch:
         plan = _load_plan(project_dir)
         if expected_clips <= 0:
             if plan is None:
-                raise RuntimeError(f"H3 LongTake: no {PLAN_FILE} in {project_dir}; set expected_clips.")
+                # Nothing rendered yet (dry run, or the Render has not run): report instead of failing,
+                # so a workflow with the Stitch left unmuted still completes.
+                report = (f"nothing to stitch: no {PLAN_FILE} in {project_dir}. Run the Render with dry_run=false "
+                          "first (or set expected_clips).")
+                print("[H3 LongTake] " + report)
+                return {"ui": {"text": [report]}, "result": ("", report)}
             expected_clips = len(plan["plan"]["clips"])
 
         files = []

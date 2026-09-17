@@ -4,7 +4,10 @@ sys.path.insert(0, COMFY)
 os.chdir(COMFY)
 import torch, importlib
 import folder_paths, comfy.nested_tensor
-m = importlib.import_module("custom_nodes.ComfyUI-H3-LongTake.longtake_nodes")
+# load the pack this test ships with (not whatever copy is installed under custom_nodes)
+import importlib.util
+_spec = importlib.util.spec_from_file_location("longtake_nodes", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "longtake_nodes.py"))
+m = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(m)
 
 tmp = tempfile.mkdtemp()
 folder_paths.set_output_directory(tmp)
@@ -304,3 +307,8 @@ assert json.load(open(os.path.join(pm, "workflow.json"), encoding="utf-8")) == f
 assert json.load(open(os.path.join(pm, "workflow_first.json"), encoding="utf-8")) == fake_wf
 assert os.path.isfile(os.path.join(pm, "settings_first.json"))
 print("meta ok")
+
+# --- Stitch before any render (dry run left unmuted): report, no exception -------------------------
+st = m.H3LongTakeStitch().stitch("never_rendered", "never_final", audio_file=m.AUDIO_NONE)
+assert st["result"][0] == "" and "nothing to stitch" in st["result"][1], st
+print("stitch-empty ok")
