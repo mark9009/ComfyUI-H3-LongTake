@@ -736,13 +736,29 @@ def _find_ffmpeg():
     return found
 
 
-def _write_mp4(path, images, crf):
-    """images: [T,H,W,3] float 0..1 -> h264 yuv420p mp4 at 24 fps through a pipe."""
+def _write_mp4(path, images, crf, audio=None, audio_from=None):
+    """images: [T,H,W,3] float 0..1 -> h264 yuv420p mp4 at 24 fps through a pipe.
+    audio: optional (waveform [C, L] float, sample_rate) -> aac track in the same file.
+    audio_from: optional file whose audio track (if any) is copied."""
     ffmpeg = _find_ffmpeg()
     t, h, w = int(images.shape[0]), int(images.shape[1]), int(images.shape[2])
     cmd = [
         ffmpeg, "-y", "-v", "error",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-r", str(FPS), "-i", "pipe:0",
+    ]
+    raw_audio = None
+    if audio is not None and audio[0] is not None and int(audio[0].shape[-1]) > 0:
+        wave, sr = audio
+        raw_audio = path + ".pcm"
+        with open(raw_audio, "wb") as fh:
+            fh.write(wave.T.contiguous().to(torch.float32).cpu().numpy().tobytes())
+        cmd += ["-f", "f32le", "-ar", str(int(sr)), "-ac", str(int(wave.shape[0])), "-i", raw_audio,
+                "-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k",
+                # no -shortest: it drops the last video frame; the video sets the duration
+                "-t", f"{t / float(FPS):.6f}"]
+    elif audio_from:
+        cmd += ["-i", audio_from, "-map", "0:v:0", "-map", "1:a:0?", "-c:a", "copy", "-t", f"{t / float(FPS):.6f}"]
+    cmd += [
         "-c:v", "libx264", "-preset", "medium", "-crf", str(int(crf)), "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", path,
     ]
@@ -755,8 +771,17 @@ def _write_mp4(path, images, crf):
         proc.stdin.close()
         err = proc.stderr.read().decode("utf-8", "replace")
         code = proc.wait()
+        if raw_audio:
+            try:
+                os.remove(raw_audio)
+            except OSError:
+                pass
     if code != 0:
         raise RuntimeError(f"H3 LongTake: ffmpeg failed writing {path}:\n{err}")
+
+
+# concatenation that keeps the audio already inside the chunks (I2V projects)
+CLIP_AUDIO_ARGS = ["-map", "0:v:0", "-map", "0:a:0?", "-c:a", "copy"]
 
 
 def _ui_video(path):
@@ -1400,6 +1425,583 @@ class H3LongTakeRender:
         return {"ui": ui, "result": (out, project_dir, report)}
 
 
+# ----------------------------------------------------------------------------
+# H3 LongTake Image -> Video: a long video from a single image (fl2va) clip by
+# clip, one prompt block per clip. Same plan/cache/anchors/seam/Stitch as the
+# Render, but without a source: clip 0 starts from the image as a keyframe at
+# frame 0 (like the core "MiniMax H3 Image to Video" node), the next ones from
+# the previous clip's tail. H3 generates the audio: it is decoded per clip and
+# written into the chunk's mp4; the Stitch concatenates it.
+# ----------------------------------------------------------------------------
+
+PROMPT_BLOCK_SEPARATOR = "---"
+I2V_ENGINE = "i2v"
+
+
+def split_prompt_blocks(text):
+    """Blocks separated by a '---' (or '***') line: one per clip, the last one repeats.
+    Blank lines around the blocks are ignored."""
+    blocks, current = [], []
+    for line in str(text or "").splitlines():
+        if line.strip() in (PROMPT_BLOCK_SEPARATOR, "***"):
+            blocks.append("\n".join(current).strip())
+            current = []
+        else:
+            current.append(line)
+    blocks.append("\n".join(current).strip())
+    blocks = [b for b in blocks if b]
+    return blocks
+
+
+def _decode_clip_audio(audio_vae, audio_lat, ctx, new):
+    """Clip audio latent -> waveform [C, L] of the new frames only (without the context)."""
+    wave = audio_vae.decode(audio_lat.to(comfy.model_management.intermediate_device())).movedim(-1, 1)
+    std = torch.std(wave, dim=[1, 2], keepdim=True) * 5.0
+    std[std < 1.0] = 1.0
+    wave = (wave / std)[0].float().cpu()
+    sr = int(getattr(audio_vae, "audio_sample_rate_output", getattr(audio_vae, "audio_sample_rate", 44100)))
+    a = int(round(ctx / float(FPS) * sr))
+    b = int(round((ctx + new) / float(FPS) * sr))
+    return wave[:, a:b].contiguous(), sr
+
+
+class H3LongTakeImageRender:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", {"tooltip": "H3 fl2va model (image -> video) with the LoRAs already applied. "
+                                               "identity_reference needs the ref2va (it accepts keyframes too)."}),
+                "clip": ("CLIP",),
+                "vae": ("VAE",),
+                "audio_vae": ("VAE", {"tooltip": "H3 audio VAE: the generated audio is decoded per clip and put into the chunks."}),
+                "start_image": ("IMAGE", {"tooltip": "First frame of the video (keyframe at frame 0 of clip 0)."}),
+                "prompts": ("STRING", {"multiline": True, "dynamicPrompts": True,
+                                       "default": "A slow cinematic push-in on the subject; natural light, ambient sound.\n"
+                                                  "---\n"
+                                                  "The subject turns and walks away from the camera.",
+                                       "tooltip": "One block per clip (5.2 s with clip_frames=124), separated by a '---' line. "
+                                                  "The last block repeats for the remaining clips. It can describe what "
+                                                  "happens in each stretch: the model only sees its own clip's block."}),
+                "project_name": ("STRING", {"default": "longtake_i2v"}),
+                "duration_seconds": ("FLOAT", {"default": 15.0, "min": 1.0, "max": 3600.0, "step": 0.5,
+                                    "tooltip": "Length of the final video; the plan covers it with clip_frames clips."}),
+                "width": ("INT", {"default": 896, "min": 32, "max": 4096, "step": 32, "tooltip": "Used only with aspect=manual."}),
+                "height": ("INT", {"default": 576, "min": 32, "max": 4096, "step": 32, "tooltip": "Used only with aspect=manual."}),
+                "clip_frames": ("INT", {"default": 124, "min": 22, "max": 362, "step": 17,
+                                        "tooltip": "Frames generated per clip (17k+5). 124 = 5.2 s per prompt block."}),
+                "context_frames": (CONTEXT_CHOICES, {"default": "5",
+                                   "tooltip": "Previous clip's tail used as anchor (5 = clean seam, measured)."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
+                "steps": ("INT", {"default": 4, "min": 1, "max": 100}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "euler"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "simple"}),
+                "mode": (["continue", "restart", "redo_from", "redo_one"], {"default": "continue",
+                          "tooltip": "continue: skips the clips already on disk. restart: deletes everything. "
+                                     "redo_from: redoes from redo_from_clip onwards. "
+                                     "redo_one: redoes ONLY redo_from_clip, anchoring head and tail to the neighbouring clips."}),
+                "redo_from_clip": ("INT", {"default": 0, "min": 0, "max": 9999}),
+                "max_clips": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "0 = all."}),
+                "dry_run": ("BOOLEAN", {"default": False, "tooltip": "Shows only the plan and the prompt blocks, does not generate."}),
+            },
+            "optional": {
+                "end_image": ("IMAGE", {"tooltip": "Last frame of the video (keyframe on the last frame of the last clip, as fl2va does)."}),
+                "identity_reference": ("BOOLEAN", {"default": False,
+                                       "tooltip": "start_image also as <Picture 1> (Ref2VA) in every clip: an identity anchor "
+                                                  "against drift in long chains. Needs the ref2va model."}),
+                "face_image": ("IMAGE", {"tooltip": "Close-up of the face as a reference in every clip (<Picture 2>, or <Picture 1> "
+                                                    "without identity_reference): the strongest anchor for the face. Needs the ref2va model."}),
+                "prompt_text": ("STRING", {"forceInput": True,
+                                "tooltip": "Prompt from an external text node (same '---' blocks): when connected it replaces the prompts field."}),
+                "aspect": (ASPECT_CHOICES, {"default": "source",
+                           "tooltip": "Canvas aspect: source = start_image's. width/height count only with manual."}),
+                "megapixels": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 2.0, "step": 0.05}),
+                "anchor_mode": (["keyframe", "inpaint", "none"], {"default": "keyframe",
+                                "tooltip": "keyframe: previous clip's latent tail as a guide on frames 0..C-1. "
+                                           "inpaint: tail copied into the latent and protected by the mask. none: independent clips."}),
+                "audio_context": ("BOOLEAN", {"default": True, "tooltip": "Also carries the previous clip's audio tail."}),
+                "seam_match": (SEAM_MODES, {"default": "color",
+                               "tooltip": "Exposure/hue correction of the first 24 frames towards the previous clip (pixels only)."}),
+                "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
+            },
+            "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("last_clip", "project_dir", "report")
+    FUNCTION = "render"
+    CATEGORY = "H3 LongTake"
+    OUTPUT_NODE = True
+    DESCRIPTION = (
+        "Long video from a single image with MiniMax H3 (fl2va) clip by clip, one prompt block per clip "
+        "(separated by '---'). One clip in memory, chunks on disk with the generated audio; "
+        "assemble with H3 LongTake Stitch."
+    )
+
+    def render(self, model, clip, vae, audio_vae, start_image, prompts, project_name, duration_seconds,
+               width, height, clip_frames, context_frames, seed, steps, sampler_name, scheduler,
+               mode, redo_from_clip, max_clips, dry_run,
+               end_image=None, identity_reference=False, face_image=None, prompt_text=None, aspect="source", megapixels=0.5,
+               anchor_mode="keyframe", audio_context=True, seam_match="color", chunk_crf=10,
+               api_prompt=None, extra_pnginfo=None):
+
+        if not (torch.is_tensor(start_image) and start_image.ndim == 4):
+            raise ValueError("H3 LongTake I2V: connect start_image.")
+        if isinstance(prompt_text, str) and prompt_text.strip():
+            prompts = prompt_text
+        blocks = split_prompt_blocks(prompts)
+        if not blocks:
+            raise ValueError("H3 LongTake I2V: write at least one prompt block.")
+
+        src_h, src_w = int(start_image.shape[1]), int(start_image.shape[2])
+        n24 = max(5, int(round(float(duration_seconds) * FPS)))
+        plan = build_plan(n24, clip_frames, int(context_frames), int(max_clips))
+        clips = plan["clips"]
+        C = plan["context_frames"]
+        width, height = resolve_output_size(aspect, megapixels, width, height, src_w, src_h)
+        total_new = sum(c["new"] for c in clips)
+        report_lines = [
+            f"image {src_w}x{src_h} -> video of {n24} frames ({n24 / FPS:.2f}s) in {len(clips)} clips of "
+            f"{plan['clip_frames']} frames, context {C}; output frames {total_new} ({total_new / FPS:.2f}s)",
+            f"output canvas {width}x{height} (aspect={aspect}); anchor {anchor_mode}, audio_context={bool(audio_context)}, "
+            f"seam_match={seam_match}, identity_reference={bool(identity_reference)}, "
+            f"face_image={'yes' if face_image is not None else 'no'}, end_image={'yes' if end_image is not None else 'no'}",
+            f"{len(blocks)} prompt blocks for {len(clips)} clips"
+            + (f" (the last one repeats from clip {len(blocks)})" if len(blocks) < len(clips) else "")
+            + (f" (WARNING: {len(blocks) - len(clips)} extra blocks ignored)" if len(blocks) > len(clips) else ""),
+        ]
+        for c in clips:
+            b = blocks[min(c["index"], len(blocks) - 1)]
+            report_lines.append(f"  clip {c['index']:03d}: {c['src_start'] / FPS:.1f}-{(c['src_start'] + c['ctx'] + c['new']) / FPS:.1f}s, "
+                                f"{c['length']} frames, new {c['new']} | {b[:70]}{'...' if len(b) > 70 else ''}")
+
+        placeholder = torch.zeros(1, 64, 64, 3)
+        if dry_run:
+            report = "\n".join(report_lines)
+            print("[H3 LongTake I2V] dry run\n" + report)
+            return {"ui": {"text": [report]}, "result": (placeholder, "", report)}
+
+        project_dir = _project_dir(project_name)
+        signature = {
+            "engine": I2V_ENGINE, "width": int(width), "height": int(height),
+            "clip_frames": plan["clip_frames"], "context_frames": C, "n24": n24,
+            "source": f"start_image {src_w}x{src_h}", "overlap": C, "source_role": "none",
+        }
+        previous = _load_plan(project_dir)
+        if mode == "restart":
+            removed = _delete_clips_from(project_dir, 0)
+            if removed:
+                report_lines.append(f"restart: removed {len(removed)} files")
+            previous = None
+        elif mode == "redo_from":
+            removed = _delete_clips_from(project_dir, int(redo_from_clip))
+            report_lines.append(f"redo_from {int(redo_from_clip)}: removed {len(removed)} files")
+        elif mode == "redo_one":
+            target = int(redo_from_clip)
+            if target >= len(clips):
+                raise ValueError(f"H3 LongTake I2V: redo_one: clip {target} does not exist in the plan (0..{len(clips) - 1}).")
+            for path in _clip_paths(project_dir, target):
+                if os.path.isfile(path):
+                    os.remove(path)
+            report_lines.append(f"redo_one {target}: regenerating only this clip")
+        if previous is not None and previous.get("signature") != signature:
+            raise ValueError(
+                "H3 LongTake I2V: the project on disk has a different plan (canvas, clip_frames, context or duration). "
+                f"Use mode=restart or change project_name.\non disk: {previous.get('signature')}\nnow: {signature}"
+            )
+        prompt_hash = hashlib.sha1("\n---\n".join(blocks).encode("utf-8")).hexdigest()[:12]
+        if previous is not None and previous.get("prompt_hash") != prompt_hash:
+            report_lines.append("WARNING: prompts differ from those of the cached clips.")
+        _save_workflow_copy(project_dir, api_prompt, extra_pnginfo, node_class="H3LongTakeImageRender",
+                            fresh=(mode == "restart" or previous is None))
+        _save_plan(project_dir, {
+            "signature": signature, "prompt_hash": prompt_hash, "seed": int(seed),
+            "steps": int(steps), "sampler": sampler_name, "scheduler": scheduler, "plan": plan,
+            "source_offset_seconds": 0.0, "source_path": None, "prompts": blocks,
+            "anchor_mode": anchor_mode, "audio_context": bool(audio_context),
+        })
+
+        # --- images: keyframe and identity reference, encoded once ----------------
+        # first frame: stretched onto the canvas as the core node does (geometry anchor)
+        start_resized = _resize(start_image[:1], int(width), int(height))
+        z_start = vae.encode(start_resized)
+        z_end = end_resized = None
+        if end_image is not None:
+            end_resized = _resize(end_image[:1], int(width), int(height))
+            z_end = vae.encode(end_resized)
+        # Ref2VA references in every clip: <Picture 1> = whole image, <Picture 2> = face (or the face alone)
+        ref_items, ref_blocks, ref_notes = [], [], []
+        for img, note in ((start_image if identity_reference else None, "the same person shown in"),
+                          (face_image, "the face of the same person shown in")):
+            if img is None:
+                continue
+            h, w = int(img.shape[1]), int(img.shape[2])
+            tw, th = _ref_image_canvas(w, h, "match", width, height)
+            ref_img = _resize(img[:1], tw, th)
+            ref_items.append({"type": "image", "data": ref_img})
+            ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": vae.encode(ref_img)})
+            ref_notes.append(f"{note} <Picture {len(ref_blocks)}>")
+        # the user's prompt describes the scene; the node prepends the reference tags
+        id_prefix = ("The subject is " + " and ".join(ref_notes) + ". ") if ref_notes else ""
+        print("[H3 LongTake I2V] start\n" + "\n".join(report_lines))
+
+        # --- clip loop -----------------------------------------------------------
+        pbar = comfy.utils.ProgressBar(len(clips))
+        prev_video = prev_audio = None
+        prev_tail, prev_tail_src = None, None
+        last_images = None
+        rendered, skipped = [], []
+        last_index = clips[-1]["index"]
+
+        for c in clips:
+            comfy.model_management.throw_exception_if_processing_interrupted()
+            i = c["index"]
+            latent_path, mp4_path = _clip_paths(project_dir, i)
+            if os.path.isfile(latent_path) and os.path.isfile(mp4_path):
+                saved = torch.load(latent_path, map_location="cpu")
+                prev_video, prev_audio = saved["video"], saved["audio"]
+                prev_tail, prev_tail_src = None, (mp4_path, int(saved.get("new", c["new"])))
+                skipped.append(i)
+                pbar.update(1)
+                continue
+            if i > 0 and prev_video is None:
+                raise RuntimeError(f"H3 LongTake I2V: clip {i - 1} is missing from the cache, cannot continue from {i}.")
+
+            length, ctx, new = c["length"], c["ctx"], c["new"]
+            prompt = id_prefix + blocks[min(i, len(blocks) - 1)]
+            print(f"[H3 LongTake I2V] clip {i + 1}/{len(clips)}: {length} frames, new {new} | {prompt[:80]}")
+
+            keyframes = []
+            images_for_clip = []
+            n_img_kf = 0
+            if i == 0:
+                keyframes.append({"resolved_frame_index": 0, "latent": z_start})
+                images_for_clip.append(start_resized)
+            if i == last_index and z_end is not None:
+                keyframes.append({"resolved_frame_index": length - 1, "latent": z_end})
+                images_for_clip.append(end_resized)
+
+            n_img_kf = len(keyframes)
+
+            if i > 0:
+                comfy.model_management.unload_all_models()
+                comfy.model_management.soft_empty_cache()
+            tokens = clip.tokenize(prompt, images=images_for_clip, minimax_ref_items=list(ref_items))
+            positive = clip.encode_from_tokens_scheduled(tokens)
+            if ref_blocks:
+                positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": list(ref_blocks)})
+
+            latent = _empty_av_latent(int(width), int(height), length)
+            target_video, _ = _split_av(latent["samples"])
+            nxt = None
+            if mode == "redo_one":
+                next_latent_path, _ = _clip_paths(project_dir, i + 1)
+                if os.path.isfile(next_latent_path):
+                    nxt = torch.load(next_latent_path, map_location="cpu")
+                    print(f"[H3 LongTake I2V] clip_{i:03d}: tail anchored to the head of clip_{i + 1:03d}")
+
+            noise_mask = None
+            if anchor_mode == "inpaint":
+                anchor = _InpaintAnchor(latent)
+                if i > 0:
+                    anchor.head_from_tail(prev_video, prev_audio, C, bool(audio_context))
+                if nxt is not None:
+                    anchor.tail_from_head(nxt["video"], nxt["audio"], C, bool(audio_context))
+                latent, noise_mask = anchor.latent(), anchor.mask()
+            elif anchor_mode == "keyframe":
+                if i > 0:
+                    keyframes += motion_context_keyframes(prev_video, prev_audio, C, target_video, bool(audio_context), "head")
+                if nxt is not None:
+                    keyframes += tail_context_keyframes(nxt["video"], nxt["audio"], C, target_video, bool(audio_context), "head")
+            if keyframes:
+                positive = node_helpers.conditioning_set_values(positive, {"minimax_keyframes": keyframes})
+            del nxt
+
+            print(f"[H3 LongTake I2V] clip_{i:03d} conditioning: prompt {len(prompt)} chars, "
+                  f"image keyframes {n_img_kf}, references {len(ref_blocks)}, "
+                  f"video anchors {sum(1 for k in keyframes if k.get('latent') is not None) - n_img_kf}"
+                  f" / audio {sum(1 for k in keyframes if k.get('audio_latent') is not None)}"
+                  f"{', inpaint mask' if noise_mask is not None else ''}, seed {int(seed) + i}")
+            samples = _sample(model, positive, latent, int(seed) + i, sampler_name, scheduler, steps,
+                              noise_mask=noise_mask)
+            video_lat, audio_lat = _split_av(samples)
+            video_lat, audio_lat = video_lat.cpu(), audio_lat.cpu()
+            del positive, latent, samples
+
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+            images = vae.decode(video_lat)
+            if images.ndim == 5:
+                images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+            images = images.cpu()
+            if i > 0 and seam_match != "off":
+                if prev_tail is None and prev_tail_src is not None:
+                    try:
+                        prev_tail = _tail_frames_from_mp4(prev_tail_src[0], prev_tail_src[1], SEAM_ANALYSIS_FRAMES)
+                    except Exception as exc:
+                        _LOG.warning("H3 LongTake I2V: previous clip tail not read, seam match skipped: %s", exc)
+                if prev_tail is not None and tuple(prev_tail.shape[1:]) == tuple(images.shape[1:]):
+                    images = seam_match_fn(images, ctx, seam_match, ref=prev_tail)
+            images = images[ctx: ctx + new].contiguous()
+            audio = None
+            try:
+                audio = _decode_clip_audio(audio_vae, audio_lat, ctx, new)
+            except Exception as exc:  # audio must never block the video
+                _LOG.warning("H3 LongTake I2V: clip %d audio not decoded: %s", i, exc)
+            _write_mp4(mp4_path + ".tmp.mp4", images, chunk_crf, audio=audio)
+            torch.save({"video": video_lat, "audio": audio_lat, "length": length, "ctx": ctx, "new": new},
+                       latent_path)
+            os.replace(mp4_path + ".tmp.mp4", mp4_path)
+
+            prev_video, prev_audio = video_lat, audio_lat
+            prev_tail, prev_tail_src = images[-SEAM_ANALYSIS_FRAMES:].clone(), None
+            last_images = images
+            rendered.append(i)
+            pbar.update(1)
+            del images, video_lat, audio_lat, audio
+            gc.collect()
+            comfy.model_management.soft_empty_cache()
+
+        report_lines.append(f"generated: {rendered or '-'} | already cached: {skipped or '-'}")
+        report_lines.append(f"folder: {project_dir}")
+        ui = {}
+        chunks = _existing_chunks(project_dir)
+        if chunks:
+            preview_path = os.path.join(project_dir, "preview.mp4")
+            try:
+                _concat_mp4(chunks, preview_path, CLIP_AUDIO_ARGS,
+                            metadata=_project_metadata(project_dir, api_prompt, extra_pnginfo))
+                ui = _ui_video(preview_path)
+                report_lines.append(f"preview: {len(chunks)} clips in preview.mp4 (with generated audio)")
+            except Exception as exc:
+                _LOG.warning("H3 LongTake I2V: preview not created: %s", exc)
+
+        report = "\n".join(report_lines)
+        print("[H3 LongTake I2V]\n" + report)
+        out = last_images if last_images is not None else placeholder
+        ui["text"] = [report]
+        return {"ui": ui, "result": (out, project_dir, report)}
+
+
+# ----------------------------------------------------------------------------
+# H3 LongTake Refine: second pass at a higher resolution, clip by clip (video
+# "hires fix"). For every chunk of a project: latent -> decode -> pixel
+# upscale to the new canvas -> re-encode -> partial denoise with the model
+# (the last fractions of sigma) -> new chunk in the <name>_hr project, with the
+# original chunk's audio. One clip in memory, like the Render.
+# ----------------------------------------------------------------------------
+
+REFINE_SUFFIX = "_hr"
+REFINE_PROMPT_DEFAULT = ("high quality, sharp detail, natural skin texture, clean edges, "
+                         "consistent lighting, no artifacts")
+
+
+def _partial_sigmas(model, scheduler, steps, denoise):
+    """Same sigmas as the core KSampler with denoise < 1: the tail of the schedule
+    computed over steps/denoise steps."""
+    steps = max(1, int(steps))
+    denoise = min(1.0, max(0.01, float(denoise)))
+    ms = model.get_model_object("model_sampling")
+    if denoise > 0.9999:
+        return comfy.samplers.calculate_sigmas(ms, scheduler, steps).cpu()
+    new_steps = max(steps, int(steps / denoise))
+    return comfy.samplers.calculate_sigmas(ms, scheduler, new_steps).cpu()[-(steps + 1):]
+
+
+def _sample_sigmas(model, positive, latent, seed, sampler_name, sigmas, noise_mask=None):
+    guider = _PositiveGuider(model)
+    guider.set_conds(positive)
+    sampler = comfy.samplers.sampler_object(sampler_name)
+    latent_image = comfy.sample.fix_empty_latent_channels(model, latent["samples"])
+    noise = comfy.sample.prepare_noise(latent_image, int(seed), None)
+    callback = latent_preview.prepare_callback(model, sigmas.shape[-1] - 1, {})
+    samples = guider.sample(noise, latent_image, sampler, sigmas, denoise_mask=noise_mask, callback=callback,
+                            disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=int(seed))
+    return samples.to(comfy.model_management.intermediate_device())
+
+
+class H3LongTakeRefine:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", {"tooltip": "H3 model with Turbo (ref2va or fl2va: there are no video references here)."}),
+                "clip": ("CLIP",),
+                "vae": ("VAE",),
+                "project_name": ("STRING", {"default": "longtake", "tooltip": "An already rendered project (Render or Image -> Video)."}),
+                "megapixels": ("FLOAT", {"default": 1.0, "min": 0.2, "max": 2.5, "step": 0.05,
+                               "tooltip": "Second-pass canvas (same aspect as the project). 1.0 MP ~ 736x1312 in 9:16."}),
+                "denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05,
+                            "tooltip": "How much to regenerate: 0.25-0.4 adds detail while keeping content and motion; more changes the scene."}),
+                "steps": ("INT", {"default": 4, "min": 1, "max": 100, "tooltip": "Second-pass steps (like the KSampler with denoise: schedule over steps/denoise, the tail is used)."}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "control_after_generate": True}),
+                "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {"default": "euler"}),
+                "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {"default": "simple"}),
+                "prompt": ("STRING", {"multiline": True, "default": "",
+                           "tooltip": "Empty: Image -> Video projects use the project's blocks (one per clip), "
+                                      "otherwise a generic quality prompt. With a low denoise it matters little."}),
+                "mode": (["continue", "restart"], {"default": "continue", "tooltip": "continue: skips the clips already refined."}),
+                "max_clips": ("INT", {"default": 0, "min": 0, "max": 9999, "tooltip": "0 = all."}),
+                "dry_run": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "ref_image_1": ("IMAGE", {"tooltip": "Identity reference (<Picture 1>) for the second pass: ref2va only."}),
+                "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
+                "project_dir": ("STRING", {"forceInput": True, "tooltip": "Connect the Render/I2V project_dir: it replaces project_name."}),
+            },
+            "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("last_clip", "project_dir", "report")
+    FUNCTION = "refine"
+    CATEGORY = "H3 LongTake"
+    OUTPUT_NODE = True
+    DESCRIPTION = ("Second pass at a higher resolution clip by clip (upscale + partial denoise) of an H3 LongTake "
+                   "project: writes <project>_hr with the original chunks' audio; assemble with H3 LongTake Stitch.")
+
+    def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
+               prompt, mode, max_clips, dry_run, ref_image_1=None, chunk_crf=10, project_dir=None,
+               api_prompt=None, extra_pnginfo=None):
+        if isinstance(project_dir, str) and project_dir.strip():
+            src_dir = project_dir.strip()
+        else:
+            src_dir = _project_dir(project_name)
+        src_plan = _load_plan(src_dir)
+        if src_plan is None:
+            raise ValueError(f"H3 LongTake Refine: no {PLAN_FILE} in {src_dir}: render the project first.")
+        sig = src_plan["signature"]
+        clips = src_plan["plan"]["clips"]
+        if max_clips:
+            clips = clips[:int(max_clips)]
+        sw, sh = int(sig["width"]), int(sig["height"])
+        width, height = resolve_output_size("source", megapixels, sw, sh, sw, sh)
+        i2v = sig.get("engine") == I2V_ENGINE
+        blocks = src_plan.get("prompts") if (i2v and not str(prompt).strip()) else None
+        base_prompt = str(prompt).strip() or REFINE_PROMPT_DEFAULT
+        sigmas = _partial_sigmas(model, scheduler, steps, denoise)
+        out_dir = _project_dir(os.path.basename(src_dir.rstrip("\\/")) + REFINE_SUFFIX)
+        report_lines = [
+            f"project {src_dir}: {len(clips)} clips from {sw}x{sh} -> {width}x{height} ({megapixels:g} MP)",
+            f"denoise {denoise:g}, {int(steps)} steps ({scheduler}): sigmas "
+            + ", ".join(f"{float(v):.3f}" for v in sigmas),
+            ("per-clip prompts from the I2V project" if blocks else f"prompt: {base_prompt[:80]}")
+            + (f"; <Picture 1> connected" if ref_image_1 is not None else ""),
+            f"output: {out_dir}",
+        ]
+        placeholder = torch.zeros(1, 64, 64, 3)
+        if dry_run:
+            report = "\n".join(report_lines)
+            print("[H3 LongTake Refine] dry run\n" + report)
+            return {"ui": {"text": [report]}, "result": (placeholder, "", report)}
+
+        if mode == "restart":
+            removed = _delete_clips_from(out_dir, 0)
+            if removed:
+                report_lines.append(f"restart: removed {len(removed)} files")
+        # refined project's plan: same cut, new canvas; the Stitch reads it like the original
+        new_sig = dict(sig, width=int(width), height=int(height), refined_from=src_dir)
+        _save_workflow_copy(out_dir, api_prompt, extra_pnginfo, node_class="H3LongTakeRefine",
+                            fresh=(mode == "restart" or _load_plan(out_dir) is None))
+        _save_plan(out_dir, dict(src_plan, signature=new_sig, refine={"denoise": float(denoise), "steps": int(steps),
+                                                                        "seed": int(seed), "megapixels": float(megapixels)}))
+
+        ref_items, ref_blocks = [], []
+        if ref_image_1 is not None:
+            h, w = int(ref_image_1.shape[1]), int(ref_image_1.shape[2])
+            tw, th = _ref_image_canvas(w, h, "match", width, height)
+            ref_img = _resize(ref_image_1[:1], tw, th)
+            ref_items.append({"type": "image", "data": ref_img})
+            ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": vae.encode(ref_img)})
+        print("[H3 LongTake Refine] start\n" + "\n".join(report_lines))
+
+        pbar = comfy.utils.ProgressBar(len(clips))
+        last_images = None
+        done, skipped = [], []
+        for c in clips:
+            comfy.model_management.throw_exception_if_processing_interrupted()
+            i = c["index"]
+            src_latent, src_mp4 = _clip_paths(src_dir, i)
+            dst_latent, dst_mp4 = _clip_paths(out_dir, i)
+            if not os.path.isfile(src_latent):
+                raise RuntimeError(f"H3 LongTake Refine: {os.path.basename(src_latent)} is missing from the source project.")
+            if os.path.isfile(dst_mp4) and os.path.isfile(dst_latent):
+                skipped.append(i)
+                pbar.update(1)
+                continue
+            saved = torch.load(src_latent, map_location="cpu")
+            video_lat, audio_lat = saved["video"], saved["audio"]
+            ctx, new = int(saved.get("ctx", c["ctx"])), int(saved.get("new", c["new"]))
+            clip_prompt = base_prompt if blocks is None else blocks[min(i, len(blocks) - 1)]
+            if ref_blocks:
+                clip_prompt = "The subject is the same person shown in <Picture 1>. " + clip_prompt
+            print(f"[H3 LongTake Refine] clip {i + 1}/{len(clips)}: {sw}x{sh} -> {width}x{height}")
+
+            # 1) decode at the original canvas, pixel upscale, re-encode
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+            images = vae.decode(video_lat)
+            if images.ndim == 5:
+                images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+            up = _resize(images.cpu(), int(width), int(height))
+            del images
+            z_up = vae.encode(up)
+            del up
+            latent = {"samples": comfy.nested_tensor.NestedTensor((z_up.to(comfy.model_management.intermediate_device()),
+                                                                   audio_lat.to(comfy.model_management.intermediate_device())))}
+            # audio is untouched: zero mask (preserved) on the audio branch
+            vmask = torch.ones(1, 1, *z_up.shape[2:], dtype=torch.float32)
+            amask = torch.zeros(1, 1, *audio_lat.shape[2:], dtype=torch.float32)
+            noise_mask = comfy.nested_tensor.NestedTensor((vmask, amask))
+
+            # 2) text conditioning (+ reference) and partial denoise
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+            tokens = clip.tokenize(clip_prompt, minimax_ref_items=list(ref_items))
+            positive = clip.encode_from_tokens_scheduled(tokens)
+            if ref_blocks:
+                positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": list(ref_blocks)})
+            samples = _sample_sigmas(model, positive, latent, int(seed) + i, sampler_name, sigmas, noise_mask=noise_mask)
+            v_out, a_out = _split_av(samples)
+            v_out = v_out.cpu()
+            del positive, latent, samples, z_up
+
+            # 3) decode, cut the context, mp4 with the original chunk's audio
+            comfy.model_management.unload_all_models()
+            comfy.model_management.soft_empty_cache()
+            out = vae.decode(v_out)
+            if out.ndim == 5:
+                out = out.reshape(-1, out.shape[-3], out.shape[-2], out.shape[-1])
+            out = out.cpu()[ctx: ctx + new].contiguous()
+            _write_mp4(dst_mp4 + ".tmp.mp4", out, chunk_crf, audio_from=src_mp4 if os.path.isfile(src_mp4) else None)
+            torch.save({"video": v_out, "audio": audio_lat, "length": int(saved.get("length", c["length"])), "ctx": ctx, "new": new},
+                       dst_latent)
+            os.replace(dst_mp4 + ".tmp.mp4", dst_mp4)
+            last_images = out
+            done.append(i)
+            pbar.update(1)
+            del out, v_out
+            gc.collect()
+            comfy.model_management.soft_empty_cache()
+
+        report_lines.append(f"refined: {done or '-'} | already done: {skipped or '-'}")
+        ui = {}
+        chunks = _existing_chunks(out_dir)
+        if chunks:
+            preview_path = os.path.join(out_dir, "preview.mp4")
+            try:
+                _concat_mp4(chunks, preview_path, CLIP_AUDIO_ARGS if i2v else None,
+                            metadata=_project_metadata(out_dir, api_prompt, extra_pnginfo))
+                ui = _ui_video(preview_path)
+                report_lines.append(f"preview: {len(chunks)} clips in preview.mp4")
+            except Exception as exc:
+                _LOG.warning("H3 LongTake Refine: preview not created: %s", exc)
+        report = "\n".join(report_lines)
+        print("[H3 LongTake Refine]\n" + report)
+        ui["text"] = [report]
+        return {"ui": ui, "result": (last_images if last_images is not None else placeholder, out_dir, report)}
+
+
 class H3LongTakeStitch:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1478,9 +2080,14 @@ class H3LongTakeStitch:
         stdin_bytes = None
         audio_note = None
         audio_path = None
+        i2v_project = ((plan or {}).get("signature") or {}).get("engine") == I2V_ENGINE
         if audio_file in (AUDIO_AUTO, NO_FILE, "", None):
             # NO_FILE: workflows saved with the previous version
-            if source_audio is None:
+            if source_audio is None and i2v_project:
+                # image-to-video project: the audio is the one H3 generated, already inside each chunk
+                audio_args = list(CLIP_AUDIO_ARGS)
+                audio_note = "audio generated by H3 (from the chunks)"
+            elif source_audio is None:
                 audio_path = (plan or {}).get("source_path")
                 if audio_path and not os.path.isfile(audio_path):
                     _LOG.warning("H3 LongTake: project source not found (%s), assembling without audio.", audio_path)
@@ -1498,7 +2105,7 @@ class H3LongTakeStitch:
             stdin_bytes = wave.T.contiguous().to(torch.float32).cpu().numpy().tobytes()
             audio_args += ["-f", "f32le", "-ar", str(sr), "-ac", str(int(wave.shape[0])), "-i", "pipe:0"]
             audio_note = "audio from source_audio"
-        if audio_note:
+        if audio_note and audio_args != CLIP_AUDIO_ARGS:
             audio_args += ["-map", "0:v:0", "-map", "1:a:0?", "-c:a", "aac", "-b:a", "192k"]
             if plan is not None:
                 # the video rules: the audio is cut to its duration, never the other way round
@@ -1522,10 +2129,14 @@ class H3LongTakeStitch:
 
 NODE_CLASS_MAPPINGS = {
     "H3LongTakeRender": H3LongTakeRender,
+    "H3LongTakeImageRender": H3LongTakeImageRender,
+    "H3LongTakeRefine": H3LongTakeRefine,
     "H3LongTakeStitch": H3LongTakeStitch,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "H3LongTakeRender": "H3 LongTake Render",
+    "H3LongTakeImageRender": "H3 LongTake Image to Video",
+    "H3LongTakeRefine": "H3 LongTake Refine (second pass)",
     "H3LongTakeStitch": "H3 LongTake Stitch",
 }
