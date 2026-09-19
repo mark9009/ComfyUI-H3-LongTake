@@ -1846,6 +1846,8 @@ class H3LongTakeRefine:
             },
             "optional": {
                 "ref_image_1": ("IMAGE", {"tooltip": "Identity reference (<Picture 1>) for the second pass: ref2va only."}),
+                "face_image": ("IMAGE", {"tooltip": "Close-up of the face (<Picture 2>, or <Picture 1> alone) for the second pass: "
+                                                    "restores the picture's face even where the first pass lost it. ref2va only."}),
                 "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
                 "project_dir": ("STRING", {"forceInput": True, "tooltip": "Connect the Render/I2V project_dir: it replaces project_name."}),
             },
@@ -1861,7 +1863,7 @@ class H3LongTakeRefine:
                    "project: writes <project>_hr with the original chunks' audio; assemble with H3 LongTake Stitch.")
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
-               prompt, mode, max_clips, dry_run, ref_image_1=None, chunk_crf=10, project_dir=None,
+               prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, chunk_crf=10, project_dir=None,
                api_prompt=None, extra_pnginfo=None):
         if isinstance(project_dir, str) and project_dir.strip():
             src_dir = project_dir.strip()
@@ -1886,7 +1888,8 @@ class H3LongTakeRefine:
             f"denoise {denoise:g}, {int(steps)} steps ({scheduler}): sigmas "
             + ", ".join(f"{float(v):.3f}" for v in sigmas),
             ("per-clip prompts from the I2V project" if blocks else f"prompt: {base_prompt[:80]}")
-            + (f"; <Picture 1> connected" if ref_image_1 is not None else ""),
+            + (f"; <Picture 1> connected" if ref_image_1 is not None else "")
+            + (f"; face connected" if face_image is not None else ""),
             f"output: {out_dir}",
         ]
         placeholder = torch.zeros(1, 64, 64, 3)
@@ -1906,13 +1909,17 @@ class H3LongTakeRefine:
         _save_plan(out_dir, dict(src_plan, signature=new_sig, refine={"denoise": float(denoise), "steps": int(steps),
                                                                         "seed": int(seed), "megapixels": float(megapixels)}))
 
-        ref_items, ref_blocks = [], []
-        if ref_image_1 is not None:
-            h, w = int(ref_image_1.shape[1]), int(ref_image_1.shape[2])
+        ref_items, ref_blocks, ref_notes = [], [], []
+        for img, note in ((ref_image_1, "the same person shown in"), (face_image, "the face of the same person shown in")):
+            if img is None:
+                continue
+            h, w = int(img.shape[1]), int(img.shape[2])
             tw, th = _ref_image_canvas(w, h, "match", width, height)
-            ref_img = _resize(ref_image_1[:1], tw, th)
+            ref_img = _resize(img[:1], tw, th)
             ref_items.append({"type": "image", "data": ref_img})
             ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": vae.encode(ref_img)})
+            ref_notes.append(f"{note} <Picture {len(ref_blocks)}>")
+        id_prefix = ("The subject is " + " and ".join(ref_notes) + ". ") if ref_notes else ""
         print("[H3 LongTake Refine] start\n" + "\n".join(report_lines))
 
         pbar = comfy.utils.ProgressBar(len(clips))
@@ -1933,8 +1940,7 @@ class H3LongTakeRefine:
             video_lat, audio_lat = saved["video"], saved["audio"]
             ctx, new = int(saved.get("ctx", c["ctx"])), int(saved.get("new", c["new"]))
             clip_prompt = base_prompt if blocks is None else blocks[min(i, len(blocks) - 1)]
-            if ref_blocks:
-                clip_prompt = "The subject is the same person shown in <Picture 1>. " + clip_prompt
+            clip_prompt = id_prefix + clip_prompt
             print(f"[H3 LongTake Refine] clip {i + 1}/{len(clips)}: {sw}x{sh} -> {width}x{height}")
 
             # 1) decode at the original canvas, pixel upscale, re-encode

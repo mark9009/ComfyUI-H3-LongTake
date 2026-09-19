@@ -227,7 +227,8 @@ the preview and the Stitch concatenate it.
 | `aspect` / `megapixels` | canvas: `source` = `start_image`'s aspect |
 | the rest | as the Render (`context_frames`, `anchor_mode`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
 
-Workflow: `workflow/H3_LongTake_i2v.json` (Refine and Stitch muted, Ctrl+M to enable them).
+Workflow: `workflow/H3_LongTake_i2v.json` (Refine and Stitch muted, Ctrl+M to enable them). Every shipped workflow
+carries a README note inside the graph with the setup, the steps and the measured defaults.
 
 **Identity drift, measured** (30 s = 6 clips, ArcFace similarity to the reference face, one sample per second,
 0.5 MP, seed 0, the same 6 prompt blocks):
@@ -262,11 +263,18 @@ protected by the mask). The `_hr` project has its own `plan.json`: the Stitch as
 | `steps` | second-pass steps (schedule over `steps/denoise`, the tail is used: 4 steps at 0.25 → sigmas 0.80 → 0.45 → 0) |
 | `prompt` | empty: Image to Video projects use their per-clip blocks, otherwise a generic quality prompt |
 | `ref_image_1` | `<Picture 1>`: puts (or restores) the identity even on a project generated without it |
+| `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone): the second pass **restores the picture's face on the whole video**, even where the first pass lost it |
 
 Measured on a 15 s I2V project (3 clips, 608×832 → 864×1184, denoise 0.25, `<Picture 1>`): real skin, hair and
 make-up where 0.5 MP looked "plastic"; face 0.31 → 0.49; seams 0.059 → 0.048 (clips refined on their own do not
 create cuts); ~5.7 min per clip on 16 GB (1.0 MP with 4 partial steps + two VAE round trips). High-contrast
 textures (graffiti) stay a touch softer than the original.
+
+Face coherence through the second pass alone (30 s I2V project rendered with fl2va and **no** references, ArcFace
+similarity to the picture): original 0.27 (0.44 → 0.30 → 0.16 → 0.15, a different person by 20 s) → refined with
+image + face **0.62** (0.72 → 0.67 → 0.49 → 0.59, min 0.29), face only 0.61; seams 0.059 → 0.047. Motion and
+framing are the first pass's; the identity comes from the second. So a practical two-step flow is: a fast first
+pass without references, identity and detail in the Refine.
 
 ---
 
