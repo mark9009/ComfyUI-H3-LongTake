@@ -251,8 +251,8 @@ Steps, Turbo strength and sigma shift do **not** change the grain (flat-area noi
 
 Video "hires fix", clip by clip, on an already rendered project (Render or Image to Video): latent → decode →
 pixel upscale to the new canvas → re-encode → **partial denoise** (the same sigmas as the core KSampler with
-`denoise` < 1) → new chunk in `<project>_hr`, with the original chunk's audio (the latent's audio branch is
-protected by the mask). The `_hr` project has its own `plan.json`: the Stitch assembles it like the original.
+`denoise` < 1) → new chunk in `<project>/hr`, with the original chunk's audio (the latent's audio branch is
+protected by the mask). The `hr` folder has its own `plan.json`: the Stitch assembles it like the original (connect `project_dir` from the Refine, or `project_name = name/hr`).
 
 | input | notes |
 |---|---|

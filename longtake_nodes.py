@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 
@@ -705,10 +706,15 @@ class _InpaintAnchor:
 # ----------------------------------------------------------------------------
 
 def _project_dir(project_name):
-    name = "".join(ch for ch in str(project_name).strip() if ch.isalnum() or ch in "-_ .").strip()
-    if not name:
+    """output/h3_longtake/<name>; 'name/subfolder' is allowed (e.g. the Refine writes to <project>/hr)."""
+    parts = []
+    for part in re.split(r"[\\/]+", str(project_name).strip()):
+        name = "".join(ch for ch in part.strip() if ch.isalnum() or ch in "-_ .").strip()
+        if name and name not in (".", ".."):
+            parts.append(name)
+    if not parts:
         raise ValueError("H3 LongTake: project_name is empty or invalid.")
-    path = os.path.join(folder_paths.get_output_directory(), CACHE_SUBFOLDER, name)
+    path = os.path.join(folder_paths.get_output_directory(), CACHE_SUBFOLDER, *parts)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -1791,7 +1797,7 @@ class H3LongTakeImageRender:
 # original chunk's audio. One clip in memory, like the Render.
 # ----------------------------------------------------------------------------
 
-REFINE_SUFFIX = "_hr"
+REFINE_SUBDIR = "hr"   # the refined clips live inside the project folder: <project>/hr
 REFINE_PROMPT_DEFAULT = ("high quality, sharp detail, natural skin texture, clean edges, "
                          "consistent lighting, no artifacts")
 
@@ -1828,7 +1834,8 @@ class H3LongTakeRefine:
                 "model": ("MODEL", {"tooltip": "H3 model with Turbo (ref2va or fl2va: there are no video references here)."}),
                 "clip": ("CLIP",),
                 "vae": ("VAE",),
-                "project_name": ("STRING", {"default": "longtake", "tooltip": "An already rendered project (Render or Image -> Video)."}),
+                "project_name": ("STRING", {"default": "longtake", "tooltip": "An already rendered project (Render or Image -> Video). "
+                                                                          "The refined clips go to <project>/hr (in the Stitch: project_name = 'name/hr')."}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.2, "max": 2.5, "step": 0.05,
                                "tooltip": "Second-pass canvas (same aspect as the project). 1.0 MP ~ 736x1312 in 9:16."}),
                 "denoise": ("FLOAT", {"default": 0.4, "min": 0.05, "max": 1.0, "step": 0.05,
@@ -1860,7 +1867,7 @@ class H3LongTakeRefine:
     CATEGORY = "H3 LongTake"
     OUTPUT_NODE = True
     DESCRIPTION = ("Second pass at a higher resolution clip by clip (upscale + partial denoise) of an H3 LongTake "
-                   "project: writes <project>_hr with the original chunks' audio; assemble with H3 LongTake Stitch.")
+                   "project: writes <project>/hr with the original chunks' audio; assemble with H3 LongTake Stitch.")
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
                prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, chunk_crf=10, project_dir=None,
@@ -1882,7 +1889,8 @@ class H3LongTakeRefine:
         blocks = src_plan.get("prompts") if (i2v and not str(prompt).strip()) else None
         base_prompt = str(prompt).strip() or REFINE_PROMPT_DEFAULT
         sigmas = _partial_sigmas(model, scheduler, steps, denoise)
-        out_dir = _project_dir(os.path.basename(src_dir.rstrip("\\/")) + REFINE_SUFFIX)
+        out_dir = os.path.join(src_dir, REFINE_SUBDIR)
+        os.makedirs(out_dir, exist_ok=True)
         report_lines = [
             f"project {src_dir}: {len(clips)} clips from {sw}x{sh} -> {width}x{height} ({megapixels:g} MP)",
             f"denoise {denoise:g}, {int(steps)} steps ({scheduler}): sigmas "
