@@ -365,7 +365,7 @@
      "links": null
     }
    ],
-   "title": "Character -> <Picture 1> (full body, framed like the video)",
+   "title": "<Picture 1>: character, framed like the video",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -988,7 +988,7 @@
      "links": null
     }
    ],
-   "title": "STITCH - Ctrl+M to unmute once all clips are rendered",
+   "title": "STITCH (Ctrl+M when all clips are done)",
    "properties": {
     "cnr_id": "comfyui_fearnworksnodes",
     "ver": "0.1.2",
@@ -1109,7 +1109,7 @@
  "groups": [
   {
    "id": 1,
-   "title": "1. RENDER - source_file, aspect=source; dry_run=true -> plan, then max_clips=2 -> check the seam, then max_clips=0",
+   "title": "1. RENDER: dry_run -> max_clips=2 -> 0",
    "bounding": [
     120,
     -60,
@@ -1121,7 +1121,7 @@
   },
   {
    "id": 2,
-   "title": "2. STITCH - audio and project come from the Render, nothing to set",
+   "title": "2. STITCH (Ctrl+M when done)",
    "bounding": [
     700,
     -60,

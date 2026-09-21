@@ -48,7 +48,7 @@
      ]
     }
    ],
-   "title": "UNET: fl2va (no refs) or ref2va (with identity_reference / face_image)",
+   "title": "UNET: fl2va (no refs) / ref2va (with refs)",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -119,7 +119,7 @@
      ]
     }
    ],
-   "title": "Turbo LoRA matching the model (fl2v or ref2v)",
+   "title": "Turbo LoRA of the model (fl2v / ref2v)",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -442,7 +442,7 @@
      "links": null
     }
    ],
-   "title": "face_image (optional) -> close-up of the face, needs ref2va",
+   "title": "face_image (optional, ref2va): face close-up",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -757,7 +757,7 @@
      "links": null
     }
    ],
-   "title": "H3 LongTake Image -> Video: one prompt block per clip, separated by ---",
+   "title": "Image -> Video: one prompt block per clip (---)",
    "properties": {
     "cnr_id": "comfyui_fearnworksnodes",
     "ver": "0.1.2",
@@ -823,7 +823,7 @@
    "id": 12,
    "type": "H3LongTakeRefine",
    "pos": [
-    760,
+    780,
     0
    ],
    "size": [
@@ -1003,7 +1003,7 @@
      "links": null
     }
    ],
-   "title": "H3 LongTake Refine (2nd pass, Ctrl+M to enable after the clips are rendered)",
+   "title": "Refine, 2nd pass (Ctrl+M after the clips)",
    "properties": {
     "cnr_id": "comfyui_fearnworksnodes",
     "ver": "0.1.2",
@@ -1049,7 +1049,7 @@
    "id": 13,
    "type": "H3LongTakeStitch",
    "pos": [
-    1280,
+    1420,
     0
    ],
    "size": [
@@ -1127,7 +1127,7 @@
      "links": null
     }
    ],
-   "title": "STITCH (Ctrl+M): connect project_dir from Image->Video, or from Refine for the hr folder",
+   "title": "STITCH (Ctrl+M): project_dir from I2V or Refine",
    "properties": {
     "cnr_id": "comfyui_fearnworksnodes",
     "ver": "0.1.2",
@@ -1296,7 +1296,7 @@
  "groups": [
   {
    "id": 1,
-   "title": "1. IMAGE -> VIDEO: start_image + one prompt block per 5 s (---); dry_run=true -> plan, then max_clips=1, then 0",
+   "title": "1. IMAGE -> VIDEO: one prompt block per 5 s (---); dry_run -> max_clips=1 -> 0",
    "bounding": [
     -940,
     -80,
@@ -1308,14 +1308,28 @@
   },
   {
    "id": 2,
-   "title": "2. REFINE (optional, 1.0 MP, denoise 0.25) and STITCH: unmute with Ctrl+M; Stitch takes project_dir from the node you want to assemble",
+   "title": "2. REFINE (optional, 1.0 MP) - Ctrl+M",
    "bounding": [
-    740,
+    760,
     -80,
-    980,
+    589.108984375,
     620
    ],
    "color": "#b06634",
+   "font_size": 24,
+   "flags": {}
+  },
+  {
+   "id": 3,
+   "title": "3. STITCH (Ctrl+M): from I2V or Refine",
+   "bounding": [
+    1400,
+    -80,
+    680.9771484375,
+    360
+   ],
+   "color": "#8A8",
+   "font_size": 24,
    "flags": {}
   }
  ],
