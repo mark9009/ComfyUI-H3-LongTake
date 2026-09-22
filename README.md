@@ -68,10 +68,11 @@ the PATH. No other Python dependency.
 | slot | file (ComfyUI folder) | notes |
 |---|---|---|
 | diffusion model | `minimax_h3_ref2va_pruned_fp8_scaled.safetensors` (`models/diffusion_models`) | from the official Comfy-Org MiniMax-H3 release |
-| text encoder | a MiniMax H3 Qwen3-VL-32B build (`models/text_encoders`), loaded with `CLIPLoader`, type `minimax` | int8 / nvfp4 builds both work; ~25 GB, kept in system RAM |
+| text encoder | a MiniMax H3 Qwen3-VL-32B build (`models/text_encoders`), loaded with `CLIPLoader`, type `minimax` | int8 (~26 GB) and NVFP4 (~16 GB) builds both work and give the same output; with 64 GB of RAM prefer NVFP4 (see *Face fidelity*) |
 | video VAE | `minimax_h3_video_vae_fp16.safetensors` (`models/vae`) | |
 | audio VAE | `minimax_h3_audio_vae_fp32.safetensors` (`models/vae`) | |
 | Turbo LoRA | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` (`models/loras`) | 4 steps, the node samples positive-only (CFG 1) |
+| Turbo LoRA, 8 steps (optional) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` (`models/loras`) | lightx2v v1.0, strength 1.0, `steps = 8`: steadier video and better faces in profiles, 2× the sampling time — recommended for the Refine (see *Face fidelity*) |
 | StyleTransfer LoRA (optional) | `minimax_h3_style_transfer_v1.0_r64.safetensors` (`models/loras`) | [NRDX on Civitai](https://civitai.com/models/2932297) — needed only for `source_role = guide` |
 
 The example workflows reference these file names; pick your own text-encoder file in the `CLIPLoader`.
@@ -275,6 +276,40 @@ similarity to the picture): original 0.27 (0.44 → 0.30 → 0.16 → 0.15, a di
 image + face **0.62** (0.72 → 0.67 → 0.49 → 0.59, min 0.29), face only 0.61; seams 0.059 → 0.047. Motion and
 framing are the first pass's; the identity comes from the second. So a practical two-step flow is: a fast first
 pass without references, identity and detail in the Refine.
+
+### Face fidelity: what we measured (character swap from a video)
+
+Nothing here needs new code — only what you connect and which LoRA / encoder you pick. Private test: a 13.7 s
+vertical dance video, the character replaced by a picture (`<Picture 1>`), ArcFace similarity between the video's
+face and a close-up of the picture's face (one sample per second; higher is better, 1.0 = the same photo).
+
+| step | what changes | face similarity (mean / worst second) |
+|---|---|---|
+| first pass, 0.5 MP, `<Picture 1>` only | baseline | 0.60 / 0.51 |
+| + the face close-up as `ref_image_2` (`<Picture 2>`), named in the prompt | **+0.12** | 0.72 / 0.52 |
+| + the same close-up again as `ref_image_3` | +0.01, one minute more | 0.73 / 0.53 |
+| first pass with **Turbo 8-step v1.0 768p** (8 steps, strength 1.0) instead of 4-step v0.1 | flicker −18 %, worst second +0.11, 2.1× the time | 0.74 / 0.63 |
+| Refine 1.0 MP (denoise 0.25, `ref_image_1` + `face_image`) on the 4-step first pass | | 0.79 / 0.68 |
+| Refine with the **8-step v1.0** LoRA (8 partial steps) on the 8-step first pass | best identity and stability | **0.81 / 0.70** |
+| fal *Realism-People* LoRA in the Refine | no gain (−0.02) | 0.77 / 0.63 |
+
+Recommendations that follow:
+
+- **Character swap: connect a face close-up as `ref_image_2`** (512×512 is enough) and say so in the prompt:
+  "Replace the dancer with the character from `<Picture 1>`, whose face is the face shown in `<Picture 2>`: …".
+  The whole-body picture gives the clothes and the build, the close-up gives the face. Repeating the close-up as
+  `ref_image_3` does not pay.
+- **Turbo LoRA**: `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16` (lightx2v, 8 steps, strength 1.0) gives
+  a steadier video and a better face in profiles than the 4-step v0.1, at twice the sampling time. Use it at least
+  in the Refine (`steps = 8`), where it costs ~2 minutes more per clip; keep the 4-step for fast first passes.
+- **Text encoder**: on 64 GB of RAM the int8 build (26 GB) leaves ~5 GB free with the model and the VAEs staged;
+  an **NVFP4 build (~16 GB)** gives the same output (pixel difference 6.5/255 at the same seed, same similarity)
+  and 11 GB of headroom. On Ada GPUs it runs de-quantised (the prompt encode is a few seconds longer, nothing else).
+- **After the second pass**: a classic face swap (ReActor `inswapper_128` + GPEN-BFR-512) on the refined video
+  reaches 0.88 / 0.85 with the most faithful face, at the price of a "restored" skin; a face detailer that
+  re-generates only the face with H3 (ComfyUI-H3-FaceRefine) keeps H3's skin but gains only +0.05 on a 1.0 MP
+  video, and needs a guard that puts the original frame back where no face is visible (hair, turned head), or H3
+  paints the wall where the face should be. Both are post-production, outside this node pack.
 
 ---
 
