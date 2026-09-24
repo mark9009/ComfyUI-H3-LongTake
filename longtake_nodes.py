@@ -1517,6 +1517,11 @@ class H3LongTakeImageRender:
                                                   "against drift in long chains. Needs the ref2va model."}),
                 "face_image": ("IMAGE", {"tooltip": "Close-up of the face as a reference in every clip (<Picture 2>, or <Picture 1> "
                                                     "without identity_reference): the strongest anchor for the face. Needs the ref2va model."}),
+                "character_sheet": ("IMAGE", {"tooltip": "Character sheet (several views in one image) as the last reference in every "
+                                                         "clip: the node tells the model these are angles of the same person, not "
+                                                         "different people. Use it on top of identity_reference/face_image, not instead "
+                                                         "of them. Avoid panels shot in a location other than the video's. "
+                                                         "Needs the ref2va model."}),
                 "prompt_text": ("STRING", {"forceInput": True,
                                 "tooltip": "Prompt from an external text node (same '---' blocks): when connected it replaces the prompts field."}),
                 "aspect": (ASPECT_CHOICES, {"default": "source",
@@ -1547,7 +1552,8 @@ class H3LongTakeImageRender:
     def render(self, model, clip, vae, audio_vae, start_image, prompts, project_name, duration_seconds,
                width, height, clip_frames, context_frames, seed, steps, sampler_name, scheduler,
                mode, redo_from_clip, max_clips, dry_run,
-               end_image=None, identity_reference=False, face_image=None, prompt_text=None, aspect="source", megapixels=0.5,
+               end_image=None, identity_reference=False, face_image=None, character_sheet=None,
+               prompt_text=None, aspect="source", megapixels=0.5,
                anchor_mode="keyframe", audio_context=True, seam_match="color", chunk_crf=10,
                api_prompt=None, extra_pnginfo=None):
 
@@ -1571,7 +1577,9 @@ class H3LongTakeImageRender:
             f"{plan['clip_frames']} frames, context {C}; output frames {total_new} ({total_new / FPS:.2f}s)",
             f"output canvas {width}x{height} (aspect={aspect}); anchor {anchor_mode}, audio_context={bool(audio_context)}, "
             f"seam_match={seam_match}, identity_reference={bool(identity_reference)}, "
-            f"face_image={'yes' if face_image is not None else 'no'}, end_image={'yes' if end_image is not None else 'no'}",
+            f"face_image={'yes' if face_image is not None else 'no'}, "
+            f"character_sheet={'yes' if character_sheet is not None else 'no'}, "
+            f"end_image={'yes' if end_image is not None else 'no'}",
             f"{len(blocks)} prompt blocks for {len(clips)} clips"
             + (f" (the last one repeats from clip {len(blocks)})" if len(blocks) < len(clips) else "")
             + (f" (WARNING: {len(blocks) - len(clips)} extra blocks ignored)" if len(blocks) > len(clips) else ""),
@@ -1635,10 +1643,13 @@ class H3LongTakeImageRender:
         if end_image is not None:
             end_resized = _resize(end_image[:1], int(width), int(height))
             z_end = vae.encode(end_resized)
-        # Ref2VA references in every clip: <Picture 1> = whole image, <Picture 2> = face (or the face alone)
+        # Ref2VA references in every clip: <Picture 1> = whole image, <Picture 2> = face,
+        # <Picture 3> = character sheet. The sheet goes last on purpose, so existing workflows
+        # keep the numbering they already have.
         ref_items, ref_blocks, ref_notes = [], [], []
         for img, note in ((start_image if identity_reference else None, "the same person shown in"),
-                          (face_image, "the face of the same person shown in")):
+                          (face_image, "the face of the same person shown in"),
+                          (character_sheet, "the same person seen from several angles in")):
             if img is None:
                 continue
             h, w = int(img.shape[1]), int(img.shape[2])
@@ -1855,6 +1866,8 @@ class H3LongTakeRefine:
                 "ref_image_1": ("IMAGE", {"tooltip": "Identity reference (<Picture 1>) for the second pass: ref2va only."}),
                 "face_image": ("IMAGE", {"tooltip": "Close-up of the face (<Picture 2>, or <Picture 1> alone) for the second pass: "
                                                     "restores the picture's face even where the first pass lost it. ref2va only."}),
+                "character_sheet": ("IMAGE", {"tooltip": "The same character sheet you gave the Render, as the last reference, "
+                                                         "so the second pass does not change its mind. Needs the ref2va model."}),
                 "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
                 "project_dir": ("STRING", {"forceInput": True, "tooltip": "Connect the Render/I2V project_dir: it replaces project_name."}),
             },
@@ -1870,7 +1883,8 @@ class H3LongTakeRefine:
                    "project: writes <project>/hr with the original chunks' audio; assemble with H3 LongTake Stitch.")
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
-               prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, chunk_crf=10, project_dir=None,
+               prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, character_sheet=None,
+               chunk_crf=10, project_dir=None,
                api_prompt=None, extra_pnginfo=None):
         if isinstance(project_dir, str) and project_dir.strip():
             src_dir = project_dir.strip()
@@ -1897,7 +1911,8 @@ class H3LongTakeRefine:
             + ", ".join(f"{float(v):.3f}" for v in sigmas),
             ("per-clip prompts from the I2V project" if blocks else f"prompt: {base_prompt[:80]}")
             + (f"; <Picture 1> connected" if ref_image_1 is not None else "")
-            + (f"; face connected" if face_image is not None else ""),
+            + (f"; face connected" if face_image is not None else "")
+            + (f"; character sheet connected" if character_sheet is not None else ""),
             f"output: {out_dir}",
         ]
         placeholder = torch.zeros(1, 64, 64, 3)
@@ -1918,7 +1933,9 @@ class H3LongTakeRefine:
                                                                         "seed": int(seed), "megapixels": float(megapixels)}))
 
         ref_items, ref_blocks, ref_notes = [], [], []
-        for img, note in ((ref_image_1, "the same person shown in"), (face_image, "the face of the same person shown in")):
+        for img, note in ((ref_image_1, "the same person shown in"),
+                          (face_image, "the face of the same person shown in"),
+                          (character_sheet, "the same person seen from several angles in")):
             if img is None:
                 continue
             h, w = int(img.shape[1]), int(img.shape[2])

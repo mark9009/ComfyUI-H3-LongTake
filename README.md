@@ -225,6 +225,7 @@ the preview and the Stitch concatenate it.
 | `duration_seconds` | length of the video; the plan covers it with `clip_frames` clips (the last one may be short) |
 | `identity_reference` | `start_image` also as `<Picture 1>` in every clip (ref2va): an anchor against drift |
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone) in every clip: the strongest anchor for the face. The node prepends the reference tags to the prompt |
+| `character_sheet` | a character sheet (several views in one image) as the **last** `<Picture N>` in every clip. The node tags it *"the same person seen from several angles in"*, so the model reads the views as one person instead of several. Use it **on top of** `identity_reference` / `face_image`, not instead of them (see below) |
 | `aspect` / `megapixels` | canvas: `source` = `start_image`'s aspect |
 | the rest | as the Render (`context_frames`, `anchor_mode`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
 
@@ -244,6 +245,27 @@ carries a README note inside the graph with the setup, the steps and the measure
 Without a reference the face is lost and never comes back; with one it returns even after profile stretches.
 The close-up raises fidelity from clip 0 (0.75–0.8 vs 0.6 with the keyframe alone). Recommended: image + face
 (face only pulls the framing towards a close-up). 15 s = 9.7 min at 0.5 MP.
+
+**Character sheets** (`character_sheet`, added in 1.2.0). A sheet holding several views of the subject can be
+fed as an extra reference in every clip. Measured on a deliberately hard case — 15 s = 3 clips, one seed, the
+prompt blocks written so that clip 1 *ends* on a tight shot with no face in frame and clip 2 opens wide, which
+is where identity usually breaks:
+
+| references | mean | clip 0 | clip 1 | clip 2 (the wide reopen) | min |
+|---|---|---|---|---|---|
+| `identity_reference` + `face_image` | 0.599 | 0.701 | 0.708 | 0.414 | 0.160 |
+| **sheet alone** | 0.470 | 0.625 | 0.577 | 0.221 | 0.064 |
+| both + sheet | **0.627** | 0.709 | **0.712** | **0.480** | **0.259** |
+
+A sheet **on its own is clearly worse** than the photo + face pair: in the wide reopen it is visibly a
+different person. Added **on top of** them it helps — it raises the floor and holds the identity about a
+second longer after the framing opens — and it costs no measurable time. Panels being small was not a
+problem (a dense 12-panel sheet did slightly better than a trimmed 3-view one), but keep the background flat
+and avoid panels shot in a location other than the video's: reference composition is known to bleed into the
+output. None of this rescues the underlying case — every variant still drops in clip 2. A clip that *ends*
+on a framing containing neither the face nor the place leaves the next clip with nothing to continue from,
+and no reference fixes that; `context_frames` does not either (22 measured the same as 5, at the cost of an
+extra clip).
 
 Steps, Turbo strength and sigma shift do **not** change the grain (flat-area noise < 1 level of 8 bit at
 4 / 6 / 8 steps, strength 0.85, shift 9): what you see at 0.5 MP is softness, and the cure is the second pass.
@@ -265,6 +287,7 @@ protected by the mask). The `hr` folder has its own `plan.json`: the Stitch asse
 | `prompt` | empty: Image to Video projects use their per-clip blocks, otherwise a generic quality prompt |
 | `ref_image_1` | `<Picture 1>`: puts (or restores) the identity even on a project generated without it |
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone): the second pass **restores the picture's face on the whole video**, even where the first pass lost it |
+| `character_sheet` | the same sheet you gave the Render, as the last `<Picture N>`: connecting it to only one of the two passes leaves them working from different references |
 
 Measured on a 15 s I2V project (3 clips, 608×832 → 864×1184, denoise 0.25, `<Picture 1>`): real skin, hair and
 make-up where 0.5 MP looked "plastic"; face 0.31 → 0.49; seams 0.059 → 0.048 (clips refined on their own do not
