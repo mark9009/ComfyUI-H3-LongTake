@@ -16,7 +16,8 @@ Every clip is written to disk as soon as it is done: you can stop, resume, redo 
 final video with the original audio. The full workflow is stored inside the project folder and inside the
 final mp4, so any output can be dropped back onto ComfyUI to reopen the graph.
 
-Depends on **ComfyUI core ≥ 0.34** only (no other node packs). Tested on a 16 GB GPU (RTX 4080-class) with
+Depends on **ComfyUI core ≥ 0.34** only (no other node packs required; the Refine can use an optional latent
+upscaler pack, see *Models*). Tested on a 16 GB GPU (RTX 4080-class) with
 25 GB of Qwen text-encoder weights staged in system RAM.
 
 ## Examples
@@ -59,7 +60,9 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/mark9009/ComfyUI-H3-LongTake
 ```
 
-Restart ComfyUI. `ffmpeg` must be reachable: the node uses VideoHelperSuite's ffmpeg if that pack is installed,
+Restart ComfyUI. On ComfyUI builds with comfy-aimdo's dynamic VRAM (the default since September 2026) the Render
+and Image to Video free the VRAM before each heavy phase and unload the models from the first clip on: without
+that, a second run in the same session could slow down until it hung. `ffmpeg` must be reachable: the node uses VideoHelperSuite's ffmpeg if that pack is installed,
 otherwise the `imageio-ffmpeg` binary (`pip install imageio-ffmpeg` into ComfyUI's Python), otherwise `ffmpeg` on
 the PATH. No other Python dependency.
 
@@ -73,6 +76,7 @@ the PATH. No other Python dependency.
 | audio VAE | `minimax_h3_audio_vae_fp32.safetensors` (`models/vae`) | |
 | Turbo LoRA | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` (`models/loras`) | 4 steps, the node samples positive-only (CFG 1) |
 | Turbo LoRA, 8 steps (optional) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` (`models/loras`) | lightx2v v1.0, strength 1.0, `steps = 8`: steadier video and better faces in profiles, 2× the sampling time — recommended for the Refine (see *Face fidelity*) |
+| H3 latent upscaler (optional, Refine) | `minimax_h3_latent_upscaler_3d_fp16.safetensors` (`models/latent_upscale_models`) + the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) node pack | used by the Refine's `upscale = latent_model` (default): faster and much more detail; without it the Refine falls back to the pixel upscale and says so in its report |
 | StyleTransfer LoRA (optional) | `minimax_h3_style_transfer_v1.0_r64.safetensors` (`models/loras`) | [NRDX on Civitai](https://civitai.com/models/2932297) — needed only for `source_role = guide` |
 
 The example workflows reference these file names; pick your own text-encoder file in the `CLIPLoader`.
@@ -207,7 +211,9 @@ Concatenates the chunks without re-encoding, puts the original audio back and sh
 (`output/<output_name>.mp4`). Connect the Render's `project_dir` to the `project_dir` socket: project and audio
 (`audio_file = (auto from project)`, from the same `start_seconds`) come from there. Alternatively pick/upload a
 video in `audio_file` or connect an `AUDIO`. Audio is cut to the video's length, never the other way round.
-Existing files are never overwritten (`_001`, `_002`… suffixes).
+Existing files are never overwritten (`_001`, `_002`… suffixes). With `project_dir` linked to a Render in
+`dry_run`, the Stitch (like the Refine) stops with a message instead of re-assembling the old project under
+`project_name`; while `project_dir` is linked, `project_name` is greyed out.
 
 ### H3 LongTake Image to Video
 
@@ -272,8 +278,8 @@ Steps, Turbo strength and sigma shift do **not** change the grain (flat-area noi
 
 ### H3 LongTake Refine (second pass)
 
-Video "hires fix", clip by clip, on an already rendered project (Render or Image to Video): latent → decode →
-pixel upscale to the new canvas → re-encode → **partial denoise** (the same sigmas as the core KSampler with
+Video "hires fix", clip by clip, on an already rendered project (Render or Image to Video): latent → upscale to
+the new canvas (H3 latent upscaler, or decode → lanczos → re-encode) → **partial denoise** (the same sigmas as the core KSampler with
 `denoise` < 1) → new chunk in `<project>/hr`, with the original chunk's audio (the latent's audio branch is
 protected by the mask). The `hr` folder has its own `plan.json`: the Stitch assembles it like the original (connect `project_dir` from the Refine, or `project_name = name/hr`).
 
@@ -288,10 +294,17 @@ protected by the mask). The `hr` folder has its own `plan.json`: the Stitch asse
 | `ref_image_1` | `<Picture 1>`: puts (or restores) the identity even on a project generated without it |
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone): the second pass **restores the picture's face on the whole video**, even where the first pass lost it |
 | `character_sheet` | the same sheet you gave the Render, as the last `<Picture N>`: connecting it to only one of the two passes leaves them working from different references |
+| `upscale` | `latent_model` (default, 1.3.0): the H3 latent upscaler, without going through the VAE. Needs the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) pack and `minimax_h3_latent_upscaler_3d_fp16.safetensors` in `models/latent_upscale_models`. Without them, with `frames_from = mp4` or with a canvas smaller than the source it uses `pixel` (decode, lanczos, re-encode); the report says which one ran |
+| `frames_from` | `latent` (default) or `mp4`: with `mp4` the clip's new frames are read from its `clip_XXX.mp4` chunk instead of the latent, to refine chunks you edited in pixels (a face fix, a colour grade); the context frames stay from the latent |
+
+Latent upscaler against `pixel` (416×608 → 832×1216, denoise 0.4 / 4 steps, same references and seed): **253 s
+against 375 s** per clip, face sharpness **222 against 85** (grain 5.5 against 4.0), identity 0.838 against
+0.836, hands +60 %.
 
 Measured on a 15 s I2V project (3 clips, 608×832 → 864×1184, denoise 0.25, `<Picture 1>`): real skin, hair and
 make-up where 0.5 MP looked "plastic"; face 0.31 → 0.49; seams 0.059 → 0.048 (clips refined on their own do not
-create cuts); ~5.7 min per clip on 16 GB (1.0 MP with 4 partial steps + two VAE round trips). High-contrast
+create cuts); ~5.7 min per clip on 16 GB with the pixel upscale (1.0 MP with 4 partial steps + two VAE round
+trips; about a third less with the latent upscaler). High-contrast
 textures (graffiti) stay a touch softer than the original.
 
 Face coherence through the second pass alone (30 s I2V project rendered with fl2va and **no** references, ArcFace

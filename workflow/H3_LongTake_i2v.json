@@ -981,6 +981,26 @@
       "name": "chunk_crf"
      },
      "link": null
+    },
+    {
+     "localized_name": "frames_from",
+     "name": "frames_from",
+     "shape": 7,
+     "type": "COMBO",
+     "widget": {
+      "name": "frames_from"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "upscale",
+     "name": "upscale",
+     "shape": 7,
+     "type": "COMBO",
+     "widget": {
+      "name": "upscale"
+     },
+     "link": null
     }
    ],
    "outputs": [
@@ -1027,7 +1047,9 @@
     "continue",
     0,
     false,
-    10
+    10,
+    "latent",
+    "latent_model"
    ],
    "widgets_values_named": {
     "project_name": "longtake",
@@ -1042,7 +1064,9 @@
     "mode": "continue",
     "max_clips": 0,
     "dry_run": false,
-    "chunk_crf": 10
+    "chunk_crf": 10,
+    "frames_from": "latent",
+    "upscale": "latent_model"
    }
   },
   {
@@ -1141,13 +1165,13 @@
    "widgets_values": [
     "longtake",
     "longtake_i2v_final",
-    "(auto dal progetto)",
+    "(auto from project)",
     0
    ],
    "widgets_values_named": {
     "project_name": "longtake",
     "output_name": "longtake_i2v_final",
-    "audio_file": "(auto dal progetto)",
+    "audio_file": "(auto from project)",
     "expected_clips": 0
    }
   },
@@ -1170,7 +1194,7 @@
    "title": "README — H3 LongTake Image to Video",
    "properties": {},
    "widgets_values": [
-    "## H3 LongTake — Image to Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with only one clip in VRAM/RAM: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip is written to `output/h3_longtake/<project_name>/` with the audio H3 generates; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image to Video**\n- `start_image`: the first frame (keyframe at frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0–5 s, 5–10 s, …); the last block repeats. Describe the action of each stretch; the character is fixed by the picture (and by the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (a close-up as <Picture 2>). Measured over 30 s: no reference → the face drifts to another person by 20 s (ArcFace 0.27); face reference → 0.60.\n- Workflow: `dry_run=true` → check the plan and the clip → prompt table; then `max_clips=1` to check the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)** — video \"hires fix\", clip by clip: 0.5 MP → 1.0 MP with `denoise 0.25` (0.4 regenerates more). Adds real skin/hair detail and, with `ref_image_1` + `face_image`, **restores the picture's face on the whole video** even when the first pass lost it (measured: 0.27 → 0.62 over 30 s, seams unchanged). ~5.7 min per clip. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)** — assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image to Video (first pass) or from Refine (second pass).\n\nTips: keep 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults; steps 4 / Turbo 0.95 — more steps, lower strength or a sigma shift do not reduce grain."
+    "## H3 LongTake — Image to Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with only one clip in VRAM/RAM: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip is written to `output/h3_longtake/<project_name>/` with the audio H3 generates; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image to Video**\n- `start_image`: the first frame (keyframe at frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0–5 s, 5–10 s, …); the last block repeats. Describe the action of each stretch; the character is fixed by the picture (and by the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (a close-up as <Picture 2>). Measured over 30 s: no reference → the face drifts to another person by 20 s (ArcFace 0.27); face reference → 0.60.\n- Workflow: `dry_run=true` → check the plan and the clip → prompt table; then `max_clips=1` to check the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)** — video \"hires fix\", clip by clip: 0.5 MP → 1.0 MP with `denoise 0.25` (0.4 regenerates more). Adds real skin/hair detail and, with `ref_image_1` + `face_image`, **restores the picture's face on the whole video** even when the first pass lost it (measured: 0.27 → 0.62 over 30 s, seams unchanged). `upscale = latent_model` (1.3.0) enlarges the latent with the H3 latent upscaler: install the *Comfyui_Minimax_h3_latent_Upscaler* pack and put `minimax_h3_latent_upscaler_3d_fp16.safetensors` in `models/latent_upscale_models` (measured: 253 s instead of 375 s per clip, 2.6× the face detail); without them it falls back to the pixel upscale (~5.7 min per clip) and the report says so. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)** — assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image to Video (first pass) or from Refine (second pass). With the Render in `dry_run`, Refine and Stitch stop with a message.\n\nTips: keep 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults; steps 4 / Turbo 0.95 — more steps, lower strength or a sigma shift do not reduce grain."
    ],
    "widgets_values_named": {
     "text": "## H3 LongTake — Image to Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with only one clip in VRAM/RAM: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip is written to `output/h3_longtake/<project_name>/` with the audio H3 generates; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image to Video**\n- `start_image`: the first frame (keyframe at frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0–5 s, 5–10 s, …); the last block repeats. Describe the action of each stretch; the character is fixed by the picture (and by the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (a close-up as <Picture 2>). Measured over 30 s: no reference → the face drifts to another person by 20 s (ArcFace 0.27); face reference → 0.60.\n- Workflow: `dry_run=true` → check the plan and the clip → prompt table; then `max_clips=1` to check the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)** — video \"hires fix\", clip by clip: 0.5 MP → 1.0 MP with `denoise 0.25` (0.4 regenerates more). Adds real skin/hair detail and, with `ref_image_1` + `face_image`, **restores the picture's face on the whole video** even when the first pass lost it (measured: 0.27 → 0.62 over 30 s, seams unchanged). ~5.7 min per clip. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)** — assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image to Video (first pass) or from Refine (second pass).\n\nTips: keep 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults; steps 4 / Turbo 0.95 — more steps, lower strength or a sigma shift do not reduce grain."

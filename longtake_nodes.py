@@ -37,6 +37,7 @@ import comfy.utils
 import folder_paths
 import latent_preview
 import node_helpers
+import nodes
 from comfy.ldm.minimax.model import FRAME_PER_TOKEN, FRAME_RESCALE
 
 _LOG = logging.getLogger("h3_longtake")
@@ -382,6 +383,25 @@ def _apply_range(total24, start_seconds, end_seconds):
     return start, end
 
 
+def _aimdo_on():
+    """True when ComfyUI runs comfy-aimdo's dynamic VRAM (ComfyUI from September 2026).
+
+    With aimdo, models left loaded by the previous run are no longer re-prioritised (that
+    only happens at load time): a second run in the same process slows down until it hangs,
+    GPU at 100% but at 60 W (Comfy-Org/comfy-aimdo#117). So Render and Image to Video unload
+    the models from the first clip on. A model that starts with VRAM almost full (15.4-15.8 GB
+    of 16) can also sit for minutes at 60 W before working (Comfy-Org/comfy-aimdo#118): with
+    aimdo the nodes free VRAM before every heavy phase (references, text, DiT).
+    Measured on a 4070 Ti SUPER 16 GB, 64 GB RAM, models on SATA: two runs in a row at
+    13:48 and 13:42 instead of a hung second run.
+    """
+    try:
+        import comfy.memory_management
+        return bool(getattr(comfy.memory_management, "aimdo_enabled", False))
+    except Exception:
+        return False
+
+
 class _TensorSource:
     def __init__(self, frames, fps, audio=None, start_seconds=0.0, end_seconds=0.0):
         self.frames = frames
@@ -525,6 +545,14 @@ def seam_match_fn(images, boundary, mode="color", fade=SEAM_FADE_FRAMES, ref=Non
         seg = seg + delta[None, None, None, :] * w[:, None, None, None]
     out[boundary:boundary + n] = seg.clamp(0.0, 1.0).to(out.dtype)
     return out
+
+
+def _frames_from_mp4(path):
+    """All frames of an mp4 chunk (to refine a clip that was edited in pixels, e.g. a face fix)."""
+    _, _, _, w, h = _probe_video_file(path)
+    cmd = [_find_ffmpeg(), "-v", "error", "-i", path, "-an", "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    raw = subprocess.run(cmd, capture_output=True, check=True).stdout
+    return torch.frombuffer(bytearray(raw), dtype=torch.uint8).reshape(-1, h, w, 3).float() / 255.0
 
 
 def _tail_frames_from_mp4(path, total, n):
@@ -1260,6 +1288,11 @@ class H3LongTakeRender:
             length, start, ctx, new = c["length"], c["src_start"], c["ctx"], c["new"]
             print(f"[H3 LongTake] clip {i + 1}/{len(clips)}: source {start}..{start + length - 1}, "
                   f"{length} frames, new {new}")
+            if _aimdo_on():
+                # free VRAM before re-encoding the reference video: with aimdo a model that
+                # starts with VRAM almost full sits for minutes at 60 W (measured)
+                comfy.model_management.unload_all_models()
+                comfy.model_management.soft_empty_cache()
 
             # video reference = source slice; also written to disk to verify what
             # the model actually saw (clip_NNN_ref.mp4)
@@ -1319,7 +1352,8 @@ class H3LongTakeRender:
                 positive = [[text_cond["prompt_embeds"], {"minimax_refs": ref_blocks,
                                                           "minimax_token_tags": text_cond["text_token_tags"]}]]
             else:
-                if i > 0:
+                # with aimdo from the first clip too (see _aimdo_on); without it, as before
+                if i > 0 or _aimdo_on():
                     comfy.model_management.unload_all_models()
                     comfy.model_management.soft_empty_cache()
                 tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
@@ -1369,6 +1403,11 @@ class H3LongTakeRender:
                   f", video anchors {sum(1 for k in kf if k.get('latent') is not None) - n_guide}"
                   f" / audio {sum(1 for k in kf if k.get('audio_latent') is not None)}"
                   f"{', inpaint mask' if noise_mask is not None else ''}, seed {int(seed) + i}")
+            if _aimdo_on():
+                # Qwen and VAE out of VRAM before the DiT: with aimdo H3 sometimes loads up to
+                # 15.4 GB of 16 and sits for minutes at 60 W before the first step (measured)
+                comfy.model_management.unload_all_models()
+                comfy.model_management.soft_empty_cache()
             samples = _sample(model, positive, latent, int(seed) + i, sampler_name, scheduler, steps,
                               noise_mask=noise_mask)
             video_lat, audio_lat = _split_av(samples)
@@ -1700,7 +1739,8 @@ class H3LongTakeImageRender:
 
             n_img_kf = len(keyframes)
 
-            if i > 0:
+            # with aimdo from the first clip too (see _aimdo_on); without it, as before
+            if i > 0 or _aimdo_on():
                 comfy.model_management.unload_all_models()
                 comfy.model_management.soft_empty_cache()
             tokens = clip.tokenize(prompt, images=images_for_clip, minimax_ref_items=list(ref_items))
@@ -1739,6 +1779,11 @@ class H3LongTakeImageRender:
                   f"video anchors {sum(1 for k in keyframes if k.get('latent') is not None) - n_img_kf}"
                   f" / audio {sum(1 for k in keyframes if k.get('audio_latent') is not None)}"
                   f"{', inpaint mask' if noise_mask is not None else ''}, seed {int(seed) + i}")
+            if _aimdo_on():
+                # Qwen and VAE out of VRAM before the DiT: with aimdo H3 sometimes loads up to
+                # 15.4 GB of 16 and sits for minutes at 60 W before the first step (measured)
+                comfy.model_management.unload_all_models()
+                comfy.model_management.soft_empty_cache()
             samples = _sample(model, positive, latent, int(seed) + i, sampler_name, scheduler, steps,
                               noise_mask=noise_mask)
             video_lat, audio_lat = _split_av(samples)
@@ -1837,6 +1882,32 @@ def _sample_sigmas(model, positive, latent, seed, sampler_name, sigmas, noise_ma
     return samples.to(comfy.model_management.intermediate_device())
 
 
+# H3 latent upscaler (Comfyui_Minimax_h3_latent_Upscaler package, model in models/latent_upscale_models):
+# enlarges the video latent without decoding it. Measured: at the same denoise a third faster than
+# decode + lanczos + re-encode and about 2.6 times the face detail, same identity.
+LATENT_UPSCALER_NODE = "MinimaxH3LatentUpscaler3D"
+
+
+def _latent_upscaler():
+    """(node, model file) of the H3 latent upscaler, or None when the package or the model is missing."""
+    node = nodes.NODE_CLASS_MAPPINGS.get(LATENT_UPSCALER_NODE)
+    files = [f for f in folder_paths.get_filename_list("latent_upscale_models")
+             if "minimax_h3_latent_upscaler_3d" in f.lower()]
+    if node is None or not files:
+        return None
+    files.sort(key=lambda f: (not f.endswith(".safetensors"), "fp16" not in f.lower(), f))
+    return node, files[0]
+
+
+def _upscale_latent(upscaler, video_lat, width, height):
+    node, model_name = upscaler
+    out = node.execute(latent={"samples": video_lat}, model_name=model_name,
+                       mode={"mode": "target dimensions", "width": int(width), "height": int(height)},
+                       align=32, enable_temporal_chunking=True, force_unload=True,
+                       device="cuda" if torch.cuda.is_available() else "cpu", precision="fp16")
+    return out.args[0]["samples"]
+
+
 class H3LongTakeRefine:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1870,6 +1941,14 @@ class H3LongTakeRefine:
                                                          "so the second pass does not change its mind. Needs the ref2va model."}),
                 "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
                 "project_dir": ("STRING", {"forceInput": True, "tooltip": "Connect the Render/I2V project_dir: it replaces project_name."}),
+                "frames_from": (["latent", "mp4"], {"default": "latent",
+                                 "tooltip": "mp4: the clip's new frames are read from the clip_XXX.mp4 chunk instead of the latent "
+                                            "(to refine chunks you already edited in pixels, e.g. a face fix); the context stays from the latent."}),
+                "upscale": (["latent_model", "pixel"], {"default": "latent_model",
+                            "tooltip": "latent_model: enlarges the latent with the H3 upscaler (Comfyui_Minimax_h3_latent_Upscaler + "
+                                       "minimax_h3_latent_upscaler_3d in models/latent_upscale_models), without going through the VAE: "
+                                       "faster and much more detail. When it is missing, with frames_from = mp4, or with a canvas "
+                                       "smaller than the source, pixel is used. pixel: decode, lanczos, re-encode (the old method)."}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1884,9 +1963,14 @@ class H3LongTakeRefine:
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
                prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, character_sheet=None,
-               chunk_crf=10, project_dir=None,
+               chunk_crf=10, project_dir=None, frames_from="latent", upscale="latent_model",
                api_prompt=None, extra_pnginfo=None):
-        if isinstance(project_dir, str) and project_dir.strip():
+        if isinstance(project_dir, str) and not project_dir.strip():
+            # project_dir linked but empty: the Render is in dry run. Do not fall back to project_name (another project).
+            report = "nothing to refine: the linked Render is in dry run."
+            print("[H3 LongTake Refine] " + report)
+            return {"ui": {"text": [report]}, "result": (torch.zeros(1, 64, 64, 3), "", report)}
+        if isinstance(project_dir, str):
             src_dir = project_dir.strip()
         else:
             src_dir = _project_dir(project_name)
@@ -1903,12 +1987,24 @@ class H3LongTakeRefine:
         blocks = src_plan.get("prompts") if (i2v and not str(prompt).strip()) else None
         base_prompt = str(prompt).strip() or REFINE_PROMPT_DEFAULT
         sigmas = _partial_sigmas(model, scheduler, steps, denoise)
+        upscaler = None
+        if upscale != "latent_model":
+            upscale_note = "upscale: pixel (lanczos)"
+        elif width < sw or height < sh:
+            upscale_note = "upscale: pixel (the canvas is smaller than the source)"
+        elif frames_from == "mp4":
+            upscale_note = "upscale: pixel (frames_from = mp4)"
+        else:
+            upscaler = _latent_upscaler()
+            upscale_note = (f"upscale: latent ({upscaler[1]})" if upscaler else
+                            "upscale: pixel (Comfyui_Minimax_h3_latent_Upscaler or minimax_h3_latent_upscaler_3d is missing)")
         out_dir = os.path.join(src_dir, REFINE_SUBDIR)
         os.makedirs(out_dir, exist_ok=True)
         report_lines = [
             f"project {src_dir}: {len(clips)} clips from {sw}x{sh} -> {width}x{height} ({megapixels:g} MP)",
             f"denoise {denoise:g}, {int(steps)} steps ({scheduler}): sigmas "
             + ", ".join(f"{float(v):.3f}" for v in sigmas),
+            upscale_note,
             ("per-clip prompts from the I2V project" if blocks else f"prompt: {base_prompt[:80]}")
             + (f"; <Picture 1> connected" if ref_image_1 is not None else "")
             + (f"; face connected" if face_image is not None else "")
@@ -1930,7 +2026,8 @@ class H3LongTakeRefine:
         _save_workflow_copy(out_dir, api_prompt, extra_pnginfo, node_class="H3LongTakeRefine",
                             fresh=(mode == "restart" or _load_plan(out_dir) is None))
         _save_plan(out_dir, dict(src_plan, signature=new_sig, refine={"denoise": float(denoise), "steps": int(steps),
-                                                                        "seed": int(seed), "megapixels": float(megapixels)}))
+                                                                        "seed": int(seed), "megapixels": float(megapixels),
+                                                                        "upscale": "latent" if upscaler else "pixel"}))
 
         ref_items, ref_blocks, ref_notes = [], [], []
         for img, note in ((ref_image_1, "the same person shown in"),
@@ -1968,16 +2065,29 @@ class H3LongTakeRefine:
             clip_prompt = id_prefix + clip_prompt
             print(f"[H3 LongTake Refine] clip {i + 1}/{len(clips)}: {sw}x{sh} -> {width}x{height}")
 
-            # 1) decode at the original canvas, pixel upscale, re-encode
+            # 1) latent at the new canvas: H3 latent upscaler, or decode, lanczos and re-encode
             comfy.model_management.unload_all_models()
             comfy.model_management.soft_empty_cache()
-            images = vae.decode(video_lat)
-            if images.ndim == 5:
-                images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
-            up = _resize(images.cpu(), int(width), int(height))
-            del images
-            z_up = vae.encode(up)
-            del up
+            if upscaler:
+                z_up = _upscale_latent(upscaler, video_lat, width, height)
+            else:
+                images = vae.decode(video_lat)
+                if images.ndim == 5:
+                    images = images.reshape(-1, images.shape[-3], images.shape[-2], images.shape[-1])
+                images = images.cpu()
+                if frames_from == "mp4" and os.path.isfile(src_mp4):
+                    # the clip's new frames from the pixel chunk (edited); the context stays from the latent
+                    px = _frames_from_mp4(src_mp4)
+                    if px.shape[0] != new:
+                        raise RuntimeError(f"H3 LongTake Refine: clip {i}: the mp4 chunk has {px.shape[0]} frames, expected {new}.")
+                    if px.shape[1] != images.shape[1] or px.shape[2] != images.shape[2]:
+                        px = _resize(px, int(images.shape[2]), int(images.shape[1]))
+                    images[ctx: ctx + new] = px
+                    del px
+                up = _resize(images, int(width), int(height))
+                del images
+                z_up = vae.encode(up)
+                del up
             latent = {"samples": comfy.nested_tensor.NestedTensor((z_up.to(comfy.model_management.intermediate_device()),
                                                                    audio_lat.to(comfy.model_management.intermediate_device())))}
             # audio is untouched: zero mask (preserved) on the audio branch
@@ -2074,7 +2184,12 @@ class H3LongTakeStitch:
 
     def stitch(self, project_name, output_name, audio_file=AUDIO_AUTO, source_audio=None, expected_clips=0,
                project_dir=None, api_prompt=None, extra_pnginfo=None):
-        if isinstance(project_dir, str) and project_dir.strip():
+        if isinstance(project_dir, str) and not project_dir.strip():
+            # project_dir linked but empty: the Render is in dry run. Do not re-assemble project_name's old video.
+            report = "nothing to stitch: the linked Render is in dry run."
+            print("[H3 LongTake] " + report)
+            return {"ui": {"text": [report]}, "result": ("", report)}
+        if isinstance(project_dir, str):
             project_dir = project_dir.strip()
             if not os.path.isdir(project_dir):
                 raise RuntimeError(f"H3 LongTake: project folder not found: {project_dir}")
