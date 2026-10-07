@@ -323,6 +323,8 @@ VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")
 NO_FILE = "(use source_video)"
 AUDIO_AUTO = "(auto from project)"
 AUDIO_NONE = "(no audio)"
+# the same entries in the Italian copy of the pack: workflows saved with it work here too
+MENU_ALIASES = {"(usa source_video)": NO_FILE, "(auto dal progetto)": AUDIO_AUTO, "(nessun audio)": AUDIO_NONE}
 
 
 def _list_input_videos():
@@ -1094,6 +1096,7 @@ class H3LongTakeRender:
 
     @classmethod
     def VALIDATE_INPUTS(cls, source_file=None):
+        source_file = MENU_ALIASES.get(source_file, source_file)
         # files uploaded after startup are not in the combo list yet
         if source_file and source_file != NO_FILE and not folder_paths.exists_annotated_filepath(source_file):
             return f"Video not found in input/: {source_file}"
@@ -1110,6 +1113,7 @@ class H3LongTakeRender:
                aspect="source", megapixels=0.5, prompt_text=None, start_seconds=0.0, end_seconds=0.0,
                anchor_mode="keyframe", source_role="reference", seam_match="off",
                text_cond=None, api_prompt=None, extra_pnginfo=None):
+        source_file = MENU_ALIASES.get(source_file, source_file)
 
         if source_role not in SOURCE_ROLES:
             raise ValueError(f"H3 LongTake: unknown source_role: {source_role}")
@@ -2177,6 +2181,7 @@ class H3LongTakeStitch:
 
     @classmethod
     def VALIDATE_INPUTS(cls, audio_file=None):
+        audio_file = MENU_ALIASES.get(audio_file, audio_file)
         if (audio_file and audio_file not in (AUDIO_AUTO, AUDIO_NONE, NO_FILE)
                 and not folder_paths.exists_annotated_filepath(audio_file)):
             return f"Video not found in input/: {audio_file}"
@@ -2184,6 +2189,7 @@ class H3LongTakeStitch:
 
     def stitch(self, project_name, output_name, audio_file=AUDIO_AUTO, source_audio=None, expected_clips=0,
                project_dir=None, api_prompt=None, extra_pnginfo=None):
+        audio_file = MENU_ALIASES.get(audio_file, audio_file)
         if isinstance(project_dir, str) and not project_dir.strip():
             # project_dir linked but empty: the Render is in dry run. Do not re-assemble project_name's old video.
             report = "nothing to stitch: the linked Render is in dry run."
