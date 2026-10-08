@@ -66,6 +66,17 @@ that, a second run in the same session could slow down until it hung. `ffmpeg` m
 otherwise the `imageio-ffmpeg` binary (`pip install imageio-ffmpeg` into ComfyUI's Python), otherwise `ffmpeg` on
 the PATH. No other Python dependency.
 
+### Troubleshooting
+
+- **The Manager asks to install "Fearnworks Nodes" for the H3 LongTake nodes**: workflows saved before 1.3.3 carried
+  a wrong pack label on the LongTake nodes. Install this pack (*H3 LongTake*) and load the workflows from `workflow/`
+  of 1.3.3 or later (or the 1.3.3 workflow pack on Civitai); Fearnworks Nodes is not needed.
+- **`only first/last keyframe anchors are supported`**: ComfyUI older than 0.34.0. Every clip after the first is
+  anchored to the previous one with keyframes inside the clip, which ComfyUI supports from 0.34.0. Update ComfyUI;
+  from 1.3.3 the node says so in the error.
+- **A workflow asks for `H3LongTakeFaceRefine` or an `object_image` input**: it comes from the author's development
+  build (for example a workflow embedded in a gallery video), not from a public release. Use the workflows in `workflow/`.
+
 ### Models
 
 | slot | file (ComfyUI folder) | notes |

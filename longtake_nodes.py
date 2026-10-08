@@ -670,10 +670,19 @@ def _sample(model, positive, latent, seed, sampler_name, scheduler, steps, noise
     noise = comfy.sample.prepare_noise(latent_image, int(seed), None)
     x0_output = {}
     callback = latent_preview.prepare_callback(model, sigmas.shape[-1] - 1, x0_output)
-    samples = guider.sample(
-        noise, latent_image, sampler, sigmas,
-        denoise_mask=noise_mask, callback=callback,
-        disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=int(seed))
+    try:
+        samples = guider.sample(
+            noise, latent_image, sampler, sigmas,
+            denoise_mask=noise_mask, callback=callback,
+            disable_pbar=not comfy.utils.PROGRESS_BAR_ENABLED, seed=int(seed))
+    except ValueError as exc:
+        # ComfyUI before 0.34.0 (MiniMaxH3AddGuide, PR #15439) accepts keyframes only on the first/last frame;
+        # the context anchor of every clip after the first needs them anywhere
+        if "only first/last keyframe anchors are supported" in str(exc):
+            raise RuntimeError("H3 LongTake needs ComfyUI 0.34.0 or newer: this ComfyUI only accepts keyframe anchors "
+                               "on the first/last frame, and the clip-to-clip anchor needs them anywhere. "
+                               "Update ComfyUI (core), then run again.") from exc
+        raise
     return samples.to(comfy.model_management.intermediate_device())
 
 
