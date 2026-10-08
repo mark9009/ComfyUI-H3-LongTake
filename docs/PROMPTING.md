@@ -4,6 +4,7 @@ The node's prompt field takes one English paragraph. The rules below are the one
 tested use cases (see the README). Everything after the horizontal rule is a ready-made **system prompt**:
 paste it into any LLM (a ComfyUI LLM node, a chat, a script), describe in your own words what you want to do
 with the video and which pictures you have, and it answers with the node settings and the prompt.
+At the end, a separate instruction for the character swap with the Character Swap LoRA (1.3.4).
 
 ---
 
@@ -114,3 +115,47 @@ seam_match: color
 prompt: style_transfer: Re-render this video with the style of <Picture 1>: cel-shaded comic illustration, thick dark outlines, flat saturated colours, hard-edged shadows, glossy highlights. Keep the original indoor room, sofa and ring light, background and framing exactly as in the video; do not add any scenery from <Picture 1>.
 ```
 Expect the room kept with a GTA artwork look; risk: with the full artwork the skyline replaces the room.
+
+---
+
+# Character swap prompt for the Character Swap LoRA (vision LLM)
+
+For `workflow/H3_LongTake_character_swap_v2.json` (the [Character Swap LoRA by akatz-ai](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA)).
+The instruction below goes to a **vision** LLM together with **the character picture**; in the user message write
+*who to replace in the video, with a visible detail, and the place* (e.g. "the girl in the black crop top and striped
+trousers, in a room with white louvred doors"). It answers with the prompt only.
+
+What we use: **LM Studio** with `qwen3-vl-8b-instruct-c_abliterated-v3`, temperature 0.5, the picture attached
+(1024 px long side). On our tests its prompts gave the same results as a hand-written one (likeness 0.40 against
+0.41, same background). Any vision model that follows instructions should do; check the result against the rules.
+
+```
+You write the prompt for an H3 LongTake character swap with the Character Swap LoRA. The attached image is the
+character who must enter the video (<Picture 1>). The user tells you who to replace in the video and the place.
+Answer with ONE English paragraph of 65-95 words, present tense, no lists, no quotes, no comments, nothing else.
+
+Rules:
+- Start with "Replace only": it tells the model to change nothing else.
+- Name the target by a visible detail taken from the user's message ("the woman in the green sweater", "the man
+  with the red cap", "the dancer on the left"). Never just "the person" when the video may have several people.
+- Describe the character in 10-20 words, in this order: hair, the distinctive face traits you can SEE in the image
+  (makeup or lipstick, piercings, glasses, freckles, beard, face tattoos), outfit, art style if not photographic.
+  The face traits matter most: hair and clothes alone lead to a hybrid face. Describe only what is visible.
+- No instructions about expression or acting (smiles, emotions, gaze): they can switch the swap off.
+- End with what to keep and, if the image has a recognisable background or is a sheet with several views, forbid it.
+
+Structure:
+Replace only <target with a visible detail> in <Video 1> with the character in <Picture 1>: <character in 10-20
+words: hair, face traits, outfit>. Keep the replacement character's identity, outfit and art style from <Picture 1>.
+Preserve the source video's camera, <place>, background, lighting, objects and all other people. Match the target
+person's position, scale, pose and movement. Do not show the reference sheet or its background.
+```
+
+If you also connect a close-up of the face as `ref_image_2` (recommended), append to the LLM's answer:
+"The character's face is shown in `<Picture 2>`."
+
+Example answer (character: a woman with a platinum bob and a leather jacket; target: the woman in a green sweater):
+
+```
+Replace only the woman in the green sweater in <Video 1> with the character in <Picture 1>: a woman with a short platinum blonde bob and bangs, dark red lipstick, a nose ring, wearing a black leather biker jacket over a red top, photorealistic. Keep the replacement character's identity, outfit and art style from <Picture 1>. Preserve the source video's camera, bar, wooden table, window, background, lighting, objects and all other people. Match the target person's position, scale, pose and movement. Do not show the plain grey studio background from <Picture 1>.
+```

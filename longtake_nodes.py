@@ -48,6 +48,7 @@ CANVAS = 32
 REF_IMAGE_SHORT_EDGE = 2048
 REF_VIDEO_SHORT_EDGE = 768
 REF_VIDEO_MAX_PIXELS = 768 * 1344
+MASTER_SHOT_SECONDS = 5       # <Video 1> from clip 0: short references are followed better
 MIN_REF_AUDIO_SECONDS = 2.0
 CONTEXT_CHOICES = ["5", "22", "39", "56"]
 
@@ -224,6 +225,72 @@ def _native_video_canvas(w, h):
     return cw, ch
 
 
+# Character swap: the face of the person in the <Video 1> slice passes its identity on to the result. Blurred,
+# the identity comes from <Picture 1> only; with the mouth left visible the lip movement survives. Measured
+# (07/10, Character Swap LoRA, 2 seeds x 2 clips): ArcFace to the character 0.41 -> 0.52, to the source person
+# 0.41 -> 0.22; lip sync (correlation of mouth opening) 0.63 -> 0.55 with the mouth visible, 0.03 blurring it too.
+SOURCE_FACE_MODES = ["keep", "blur", "blur_keep_mouth"]
+FACE_BLUR_GROW = 0.30      # face box enlarged by 30%
+FACE_BLUR_SIGMA = 18.0     # at 896x576; scaled with the face size
+FACE_BLUR_HOLD = 12        # frames without a detected face that reuse the last box
+_FACE_APP = None
+
+
+def _face_app():
+    """insightface buffalo_l (detector + 68 landmarks) from models/insightface, on CPU: the VRAM stays with the DiT."""
+    global _FACE_APP
+    if _FACE_APP is None:
+        try:
+            import insightface
+        except ImportError as exc:
+            raise RuntimeError("H3 LongTake: source_face needs insightface (pip install insightface onnxruntime).") from exc
+        app = insightface.app.FaceAnalysis(name="buffalo_l", root=os.path.join(folder_paths.models_dir, "insightface"),
+                                           allowed_modules=["detection", "landmark_3d_68"], providers=["CPUExecutionProvider"])
+        app.prepare(ctx_id=-1, det_size=(640, 640))
+        _FACE_APP = app
+    return _FACE_APP
+
+
+def _blur_faces(frames, keep_mouth):
+    """Blur the largest face in every frame ([T,H,W,3] float 0-1, RGB) with feathered edges; with keep_mouth the
+    original mouth (landmarks 48-67) stays visible. Returns (frames, frames with a face found)."""
+    import cv2
+    import numpy as np
+    app = _face_app()
+    out = frames.clone()
+    h, w = int(frames.shape[1]), int(frames.shape[2])
+    last, age, found = None, 0, 0
+    for i in range(int(frames.shape[0])):
+        img = (frames[i].numpy() * 255.0).round().astype(np.uint8)
+        faces = app.get(img[..., ::-1].copy())
+        mouth = None
+        if faces:
+            f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
+            last, age, mouth = f.bbox, 0, f.landmark_3d_68[48:68, :2]
+            found += 1
+        elif last is not None and age < FACE_BLUR_HOLD:
+            age += 1
+        else:
+            continue
+        x0, y0, x1, y1 = last
+        dx, dy = (x1 - x0) * FACE_BLUR_GROW / 2, (y1 - y0) * FACE_BLUR_GROW / 2
+        x0, y0, x1, y1 = int(max(0, x0 - dx)), int(max(0, y0 - dy)), int(min(w, x1 + dx)), int(min(h, y1 + dy))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        mask = np.zeros((h, w), np.float32)
+        cv2.ellipse(mask, ((x0 + x1) // 2, (y0 + y1) // 2), ((x1 - x0) // 2, (y1 - y0) // 2), 0, 0, 360, 1.0, -1)
+        mask = cv2.GaussianBlur(mask, (0, 0), max(3.0, (x1 - x0) * 0.08))
+        if keep_mouth and mouth is not None:
+            (cx, cy), (mw, mh) = mouth.mean(0), mouth.max(0) - mouth.min(0)
+            hole = np.zeros((h, w), np.float32)
+            cv2.ellipse(hole, (int(cx), int(cy)), (int(mw * 0.8) + 2, int(mh * 0.8 + mw * 0.25) + 2), 0, 0, 360, 1.0, -1)
+            mask *= 1.0 - cv2.GaussianBlur(hole, (0, 0), max(2.0, mw * 0.15))
+        blurred = cv2.GaussianBlur(img, (0, 0), max(4.0, FACE_BLUR_SIGMA * (x1 - x0) / 160.0))
+        m = np.clip(mask, 0.0, 1.0)[..., None]
+        out[i] = torch.from_numpy((img * (1.0 - m) + blurred * m) / 255.0).to(out.dtype)
+    return out, found
+
+
 def _ref_video_canvas(w, h, mode, out_w, out_h):
     if mode == "native":
         return _native_video_canvas(w, h)
@@ -248,6 +315,25 @@ def resolve_output_size(aspect, megapixels, width, height, src_w, src_h):
     a = _snap32(w, 0); a = (a[0], max(CANVAS, round(a[0] / ratio / CANVAS) * CANVAS))
     b = _snap32(0, w / ratio); b = (max(CANVAS, round(b[1] * ratio / CANVAS) * CANVAS), b[1])
     return min((a, b), key=lambda s: abs(s[0] / s[1] - ratio))
+
+
+def _ref_latent_strength(latent, strength, seed):
+    """Loosen a reference by mixing it towards Gaussian noise.
+
+    1.0 = the reference as encoded; below it the model is less and less bound
+    to reproduce it. The two weights are in quadrature (s and sqrt(1-s^2)) so
+    the latent's variance does not change: plain scaling would give the DiT a
+    flatter conditioning, not a looser one. Only the latent that goes to the DiT
+    is touched; the image Qwen sees stays whole, so the subject is still *named*
+    in the prompt. Idea from nkxx188/ComfyUI-MiniMaxH3-Easy (MIT), via SatoDive's fork.
+    """
+    s = float(strength)
+    if latent is None or s >= 1.0:
+        return latent
+    s = max(0.0, s)
+    gen = torch.Generator(device="cpu").manual_seed(int(seed) % (2 ** 31))
+    noise = torch.randn(latent.shape, generator=gen, dtype=torch.float32).to(latent.device, latent.dtype)
+    return s * latent + math.sqrt(max(0.0, 1.0 - s * s)) * noise
 
 
 def _ref_image_canvas(w, h, mode, out_w, out_h):
@@ -655,6 +741,32 @@ def tail_context_keyframes(next_video, next_audio, context_frames, target_video,
 class _PositiveGuider(comfy.samplers.CFGGuider):
     def set_conds(self, positive):
         self.inner_set_conds({"positive": positive})
+
+
+def _detail_daemon(model, strength):
+    """Make the model believe it has less noise ahead, halfway through sampling.
+
+    In the sigma window 0.05-0.75 the timestep passed to the model is reduced by
+    a sine-shaped fraction, so the model resolves fine detail instead of smoothing
+    it away as noise. Negative = softer. Detail Daemon technique, from
+    nkxx188/ComfyUI-MiniMaxH3-Easy (MIT). Measured here: no gain with 4-8 turbo
+    steps (too few sigmas fall in the window); kept at 0 by default.
+    """
+    if not strength:
+        return model
+
+    def wrapper(apply_model, params):
+        t = params["timestep"]
+        v = float(t.flatten()[0])
+        sigma = v / 1000.0 if v > 1.0 else v
+        if 0.05 < sigma < 0.75:
+            curve = math.sin((sigma - 0.05) / 0.70 * math.pi)
+            t = t * max(1e-6, 1.0 - float(strength) * curve * 0.1)
+        return apply_model(params["input"], t, **params["c"])
+
+    model = model.clone()
+    model.set_model_unet_function_wrapper(wrapper)
+    return model
 
 
 def _sample(model, positive, latent, seed, sampler_name, scheduler, steps, noise_mask=None):
@@ -1084,6 +1196,13 @@ class H3LongTakeRender:
                                                         "prompt ignored, references video->image as in the finetune, ref_image_1 only; "
                                                         "source_role must be reference. Recommended: steps 3, scheduler simple, "
                                                         "ModelSamplingMiniMaxH3 shift 3/3 upstream (= upstream sigmas 1, .857, .6, 0)."}),
+                "source_face": (SOURCE_FACE_MODES, {"default": "keep",
+                                "tooltip": "Character swap: what to do with the face of the person in the <Video 1> slice. "
+                                           "blur_keep_mouth: blurred except the mouth, so the identity comes from <Picture 1> only "
+                                           "and lip sync survives (measured: likeness to the character 0.41 -> 0.52, lip sync "
+                                           "0.63 -> 0.55). blur: blurs everything, same identity but the mouth stays still "
+                                           "(dances, gestures). Helps when the source person's identity leaks into the result. "
+                                           "Needs insightface; ~1 s per 3 frames on CPU. See clip_NNN_ref.mp4 for what the model got."}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1104,7 +1223,9 @@ class H3LongTakeRender:
         return float("nan")  # depends on what is on disk
 
     @classmethod
-    def VALIDATE_INPUTS(cls, source_file=None):
+    def VALIDATE_INPUTS(cls, source_file=None, source_face=None):
+        # source_face is checked in render(): in workflows saved before it existed its slot holds the
+        # video upload widget's value ("image"), and that must not stop the queue
         source_file = MENU_ALIASES.get(source_file, source_file)
         # files uploaded after startup are not in the combo list yet
         if source_file and source_file != NO_FILE and not folder_paths.exists_annotated_filepath(source_file):
@@ -1121,11 +1242,15 @@ class H3LongTakeRender:
                ref_image_size="match", ref_video_size="match", audio_context=True, chunk_crf=10,
                aspect="source", megapixels=0.5, prompt_text=None, start_seconds=0.0, end_seconds=0.0,
                anchor_mode="keyframe", source_role="reference", seam_match="off",
-               text_cond=None, api_prompt=None, extra_pnginfo=None):
+               text_cond=None, source_face="keep", api_prompt=None, extra_pnginfo=None):
         source_file = MENU_ALIASES.get(source_file, source_file)
 
         if source_role not in SOURCE_ROLES:
             raise ValueError(f"H3 LongTake: unknown source_role: {source_role}")
+        face_note = None
+        if source_face not in SOURCE_FACE_MODES:
+            face_note = f"source_face {source_face!r} not recognised (workflow saved before 1.3.4?): using keep"
+            source_face = "keep"
         # Viggle-Animate: ref2va finetune for character replacement, frozen text
         # embedding instead of Qwen; refs [video, image] as in the finetune
         viggle = text_cond is not None
@@ -1171,6 +1296,12 @@ class H3LongTakeRender:
         ]
         if template_used:
             report_lines.append(f"empty prompt: using the {source_role} template: {prompt}")
+        if face_note:
+            report_lines.append(face_note)
+        if source_face != "keep":
+            report_lines.append(f"face in the <Video 1> slice: {source_face}"
+                                + ("" if source_role in ("reference", "guide+reference")
+                                   else " (ignored: with this source_role the slice is not a reference)"))
         if viggle:
             try:
                 sig = comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, int(steps))
@@ -1203,6 +1334,8 @@ class H3LongTakeRender:
             "source": source.label, "overlap": 0 if before else C,
             "source_role": source_role,
         }
+        if source_face != "keep":
+            signature["source_face"] = source_face   # only when on: earlier projects stay valid
         if viggle:
             signature["engine"] = "viggle"
         previous = _load_plan(project_dir)
@@ -1331,6 +1464,9 @@ class H3LongTakeRender:
             if use_ref_video:
                 if frames is None:
                     frames = source.frames_at(start, length, cw, ch)
+                if source_face != "keep":
+                    frames, found = _blur_faces(frames, source_face == "blur_keep_mouth")
+                    print(f"[H3 LongTake] clip {i + 1}: face {source_face} in {found}/{int(frames.shape[0])} frames")
                 if not use_guide:
                     try:
                         _write_mp4(os.path.join(project_dir, f"clip_{i:03d}_ref.mp4"), frames, 18)
@@ -1511,6 +1647,31 @@ def split_prompt_blocks(text):
     return blocks
 
 
+SEAM_FADE_MS = 12.0
+
+
+def _seam_fade(wave, sr, head, tail):
+    """Constant-power ramp on the edges of an audio chunk.
+
+    Joining two waveforms at an arbitrary sample leaves a step, heard as a click. Fading the tail with a cosine
+    and the next head with a sine removes the step while the summed power stays 1. Applied IN PLACE, not as an
+    overlap: a real crossfade would eat a few milliseconds at every join and drift audio from video along a chain.
+    Idea and reasoning from SatoDive (Minimax-H3-Latent-Continuation, MIT). Measured here: with audio_context the
+    joins are already continuous (no click), so it is off by default.
+    """
+    n = int(round(SEAM_FADE_MS / 1000.0 * sr))
+    n = min(n, wave.shape[-1] // 2)
+    if n < 8:
+        return wave
+    ramp = torch.linspace(0.0, 1.0, n, dtype=wave.dtype)
+    wave = wave.clone()
+    if head:
+        wave[..., :n] *= torch.sin(ramp * (math.pi / 2))
+    if tail:
+        wave[..., -n:] *= torch.cos(ramp * (math.pi / 2))
+    return wave
+
+
 def _decode_clip_audio(audio_vae, audio_lat, ctx, new):
     """Clip audio latent -> waveform [C, L] of the new frames only (without the context)."""
     wave = audio_vae.decode(audio_lat.to(comfy.model_management.intermediate_device())).movedim(-1, 1)
@@ -1586,6 +1747,27 @@ class H3LongTakeImageRender:
                 "seam_match": (SEAM_MODES, {"default": "color",
                                "tooltip": "Exposure/hue correction of the first 24 frames towards the previous clip (pixels only)."}),
                 "chunk_crf": ("INT", {"default": 10, "min": 0, "max": 30}),
+                "reference_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                                       "tooltip": "How strictly the model must reproduce the references (identity_reference, "
+                                                  "face_image, character_sheet). 1.0 = unchanged. Lower loosens them so the take "
+                                                  "moves more. MEASURED: no gain over run-to-run noise; left at 1.0. Keyframes "
+                                                  "are not touched."}),
+                "master_shot_context": ("BOOLEAN", {"default": False,
+                                        "tooltip": "From clip 1 on, passes clip 0 as <Video 1> as a memory of the place. "
+                                                   "MEASURED: no gain, and a video reference doubles the time per step; left "
+                                                   "off. Needs the ref2va."}),
+                "detail": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05,
+                           "tooltip": "Fine detail (Detail Daemon technique). MEASURED: no sharpness gain at 0.2 or 1.0, "
+                                      "because 4-8 turbo steps touch too few sigmas for a 2-10% timestep shift to matter. "
+                                      "Left at 0; it would need a 20-30 step schedule."}),
+                "seam_fade": ("BOOLEAN", {"default": False,
+                              "tooltip": "Fades the audio by 12 ms at the chunk edges. MEASURED: our joins have no click "
+                                         "(with audio_context the track is already continuous); only useful for clips "
+                                         "rendered separately."}),
+                "object_image": ("IMAGE", {"tooltip": "An object to keep the same in every clip (e.g. a mug with its logo), "
+                                                      "as the last <Picture N> reference: a sharp logo on a flat background "
+                                                      "helps H3 not to reinvent it in close-ups. Experimental, not measured. "
+                                                      "Needs the ref2va."}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1607,7 +1789,8 @@ class H3LongTakeImageRender:
                end_image=None, identity_reference=False, face_image=None, character_sheet=None,
                prompt_text=None, aspect="source", megapixels=0.5,
                anchor_mode="keyframe", audio_context=True, seam_match="color", chunk_crf=10,
-               api_prompt=None, extra_pnginfo=None):
+               reference_strength=1.0, master_shot_context=False, detail=0.0, seam_fade=False,
+               object_image=None, api_prompt=None, extra_pnginfo=None):
 
         if not (torch.is_tensor(start_image) and start_image.ndim == 4):
             raise ValueError("H3 LongTake I2V: connect start_image.")
@@ -1631,6 +1814,8 @@ class H3LongTakeImageRender:
             f"seam_match={seam_match}, identity_reference={bool(identity_reference)}, "
             f"face_image={'yes' if face_image is not None else 'no'}, "
             f"character_sheet={'yes' if character_sheet is not None else 'no'}, "
+            f"reference_strength={float(reference_strength):g}, "
+            f"master_shot_context={bool(master_shot_context)}, detail={float(detail):g}, "
             f"end_image={'yes' if end_image is not None else 'no'}",
             f"{len(blocks)} prompt blocks for {len(clips)} clips"
             + (f" (the last one repeats from clip {len(blocks)})" if len(blocks) < len(clips) else "")
@@ -1707,14 +1892,27 @@ class H3LongTakeImageRender:
             h, w = int(img.shape[1]), int(img.shape[2])
             tw, th = _ref_image_canvas(w, h, "match", width, height)
             ref_img = _resize(img[:1], tw, th)
+            z_ref = _ref_latent_strength(vae.encode(ref_img), reference_strength, int(seed) + 101 + len(ref_blocks))
             ref_items.append({"type": "image", "data": ref_img})
-            ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": vae.encode(ref_img)})
+            ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": z_ref})
             ref_notes.append(f"{note} <Picture {len(ref_blocks)}>")
         # the user's prompt describes the scene; the node prepends the reference tags
         id_prefix = ("The subject is " + " and ".join(ref_notes) + ". ") if ref_notes else ""
+        if object_image is not None:
+            # the object (e.g. a mug with a logo) goes after the people: the <Picture> numbers in use do not move
+            h, w = int(object_image.shape[1]), int(object_image.shape[2])
+            tw, th = _ref_image_canvas(w, h, "match", width, height)
+            ref_img = _resize(object_image[:1], tw, th)
+            z_ref = _ref_latent_strength(vae.encode(ref_img), reference_strength, int(seed) + 101 + len(ref_blocks))
+            ref_items.append({"type": "image", "data": ref_img})
+            ref_blocks.append({"kind": "image", "latent_h": th // 16, "latent_w": tw // 16, "latent": z_ref})
+            id_prefix += f"The object and its printed logo are exactly as shown in <Picture {len(ref_blocks)}>. "
+        # <Video 1> = clip 0, built once when needed (after it exists)
+        master_item = master_block = None
         print("[H3 LongTake I2V] start\n" + "\n".join(report_lines))
 
         # --- clip loop -----------------------------------------------------------
+        model = _detail_daemon(model, float(detail))
         pbar = comfy.utils.ProgressBar(len(clips))
         prev_video = prev_audio = None
         prev_tail, prev_tail_src = None, None
@@ -1737,8 +1935,6 @@ class H3LongTakeImageRender:
                 raise RuntimeError(f"H3 LongTake I2V: clip {i - 1} is missing from the cache, cannot continue from {i}.")
 
             length, ctx, new = c["length"], c["ctx"], c["new"]
-            prompt = id_prefix + blocks[min(i, len(blocks) - 1)]
-            print(f"[H3 LongTake I2V] clip {i + 1}/{len(clips)}: {length} frames, new {new} | {prompt[:80]}")
 
             keyframes = []
             images_for_clip = []
@@ -1756,10 +1952,43 @@ class H3LongTakeImageRender:
             if i > 0 or _aimdo_on():
                 comfy.model_management.unload_all_models()
                 comfy.model_management.soft_empty_cache()
-            tokens = clip.tokenize(prompt, images=images_for_clip, minimax_ref_items=list(ref_items))
+
+            # <Video 1>: clip 0 as a memory of the place, from clip 1 on. Built here and not earlier because
+            # clip 0 does not exist before it is rendered; once, then reused for every later clip.
+            clip_items, clip_blocks, clip_prefix = list(ref_items), list(ref_blocks), id_prefix
+            if master_shot_context and i > 0:
+                if master_block is None:
+                    master_mp4 = _clip_paths(project_dir, 0)[1]
+                    if os.path.isfile(master_mp4):
+                        src = _FileSource(master_mp4)
+                        cw, ch = _ref_video_canvas(src.width, src.height, "match", int(width), int(height))
+                        # short references are followed better than long ones (measured): 5 s at most
+                        take = min(src.n24, MASTER_SHOT_SECONDS * FPS)
+                        mframes = src.frames_at(0, take, cw, ch)
+                        z_master = vae.encode(mframes)
+                        idx = list(range(0, int(mframes.shape[0]), FPS // 2))
+                        master_item = {"type": "video", "data": mframes[idx],
+                                       "timestamps": [k / 2.0 for k in range(len(idx))]}
+                        master_block = {"kind": "video", "latent_t": int(z_master.shape[2]),
+                                        "latent_h": ch // 16, "latent_w": cw // 16,
+                                        "ref_audio_t": 0, "latent": z_master, "audio_latent": None}
+                        del mframes
+                        print(f"[H3 LongTake I2V] <Video 1> = clip_000 ({take} frames at {cw}x{ch})")
+                    else:
+                        _LOG.warning("H3 LongTake I2V: master_shot_context but clip_000.mp4 is missing.")
+                if master_block is not None:
+                    # the images stay <Picture 1..N>, the video takes <Video 1>: the core tokenizer
+                    # numbers the two series separately
+                    clip_items = clip_items + [master_item]
+                    clip_blocks = clip_blocks + [master_block]
+                    clip_prefix = clip_prefix + "The place is the one shown in <Video 1>. "
+
+            prompt = clip_prefix + blocks[min(i, len(blocks) - 1)]
+            print(f"[H3 LongTake I2V] clip {i + 1}/{len(clips)}: {length} frames, new {new} | {prompt[:80]}")
+            tokens = clip.tokenize(prompt, images=images_for_clip, minimax_ref_items=list(clip_items))
             positive = clip.encode_from_tokens_scheduled(tokens)
-            if ref_blocks:
-                positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": list(ref_blocks)})
+            if clip_blocks:
+                positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": list(clip_blocks)})
 
             latent = _empty_av_latent(int(width), int(height), length)
             target_video, _ = _split_av(latent["samples"])
@@ -1821,6 +2050,10 @@ class H3LongTakeImageRender:
             audio = None
             try:
                 audio = _decode_clip_audio(audio_vae, audio_lat, ctx, new)
+                if seam_fade and len(clips) > 1:
+                    # no fade at the start and end of the video: only where one chunk meets the next
+                    wave, sr = audio
+                    audio = (_seam_fade(wave, sr, head=(i > 0), tail=(i < last_index)), sr)
             except Exception as exc:  # audio must never block the video
                 _LOG.warning("H3 LongTake I2V: clip %d audio not decoded: %s", i, exc)
             _write_mp4(mp4_path + ".tmp.mp4", images, chunk_crf, audio=audio)
@@ -1957,6 +2190,10 @@ class H3LongTakeRefine:
                 "frames_from": (["latent", "mp4"], {"default": "latent",
                                  "tooltip": "mp4: the clip's new frames are read from the clip_XXX.mp4 chunk instead of the latent "
                                             "(to refine chunks you already edited in pixels, e.g. a face fix); the context stays from the latent."}),
+                "detail": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.05,
+                           "tooltip": "Fine detail (Detail Daemon technique). MEASURED: no sharpness gain at 0.2 or 1.0, "
+                                      "because 4-8 turbo steps touch too few sigmas for a 2-10% timestep shift to matter. "
+                                      "Left at 0; it would need a 20-30 step schedule."}),
                 "upscale": (["latent_model", "pixel"], {"default": "latent_model",
                             "tooltip": "latent_model: enlarges the latent with the H3 upscaler (Comfyui_Minimax_h3_latent_Upscaler + "
                                        "minimax_h3_latent_upscaler_3d in models/latent_upscale_models), without going through the VAE: "
@@ -1965,6 +2202,11 @@ class H3LongTakeRefine:
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, detail=None):
+        # detail is checked in refine(): Refine nodes saved with 1.3.0-1.3.3 carry the upscale value in its slot
+        return True
 
     RETURN_TYPES = ("IMAGE", "STRING", "STRING")
     RETURN_NAMES = ("last_clip", "project_dir", "report")
@@ -1976,7 +2218,7 @@ class H3LongTakeRefine:
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
                prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, character_sheet=None,
-               chunk_crf=10, project_dir=None, frames_from="latent", upscale="latent_model",
+               chunk_crf=10, project_dir=None, detail=0.0, frames_from="latent", upscale="latent_model",
                api_prompt=None, extra_pnginfo=None):
         if isinstance(project_dir, str) and not project_dir.strip():
             # project_dir linked but empty: the Render is in dry run. Do not fall back to project_name (another project).
@@ -2057,6 +2299,11 @@ class H3LongTakeRefine:
         id_prefix = ("The subject is " + " and ".join(ref_notes) + ". ") if ref_notes else ""
         print("[H3 LongTake Refine] start\n" + "\n".join(report_lines))
 
+        try:
+            detail = float(detail)
+        except (TypeError, ValueError):
+            detail = 0.0
+        model = _detail_daemon(model, detail)
         pbar = comfy.utils.ProgressBar(len(clips))
         last_images = None
         done, skipped = [], []

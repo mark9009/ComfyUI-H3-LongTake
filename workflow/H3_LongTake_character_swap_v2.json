@@ -1,8 +1,8 @@
 {
- "id": "1f0d3c2a-7b1e-4d6a-9c1f-0a2b4c6d8e10",
+ "id": "a03f0c79-a1d5-42b3-9659-be06aeffe2e1",
  "revision": 0,
- "last_node_id": 11,
- "last_link_id": 9,
+ "last_node_id": 13,
+ "last_link_id": 13,
  "nodes": [
   {
    "id": 1,
@@ -113,7 +113,7 @@
      "name": "MODEL",
      "type": "MODEL",
      "links": [
-      2
+      11
      ]
     }
    ],
@@ -128,11 +128,11 @@
     }
    },
    "widgets_values": [
-    "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+    "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
     0.95
    ],
    "widgets_values_named": {
-    "lora_name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+    "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
     "strength_model": 0.95
    }
   },
@@ -323,7 +323,7 @@
     540
    ],
    "size": [
-    322.046484375,
+    418.898046875,
     380
    ],
    "flags": {},
@@ -365,7 +365,7 @@
      "links": null
     }
    ],
-   "title": "Style swatch -> <Picture 1>",
+   "title": "<Picture 1>: the character, framed like the video",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -381,7 +381,7 @@
     "image"
    ],
    "widgets_values_named": {
-    "image": "style_popart_halftone.png",
+    "image": "example.png",
     "upload": "image"
    }
   },
@@ -432,10 +432,10 @@
     }
    },
    "widgets_values": [
-    "style_transfer: Re-render this video with the style of <Picture 1>: bold graphic style, vibrant flat colours, clean black outlines, flat shading, halftone dots. Keep the original scene, background and framing exactly as in the video; do not add any scenery from <Picture 1>."
+    "Replace only the person in the white shirt in <Video 1> with the character in <Picture 1>: describe the character here in 10-20 words (hair, distinctive face traits such as makeup, piercings, glasses or freckles, outfit, art style if not photographic). Keep the replacement character's identity, outfit and art style from <Picture 1>. Preserve the source video's camera, room, background, lighting, objects and all other people. Match the target person's position, scale, pose and movement. Do not show the reference sheet or its background. The character's face is shown in <Picture 2>."
    ],
    "widgets_values_named": {
-    "value": "style_transfer: Re-render this video with the style of <Picture 1>: bold graphic style, vibrant flat colours, clean black outlines, flat shading, halftone dots. Keep the original scene, background and framing exactly as in the video; do not add any scenery from <Picture 1>."
+    "value": "Replace only the person in the white shirt in <Video 1> with the character in <Picture 1>: describe the character here in 10-20 words (hair, distinctive face traits such as makeup, piercings, glasses or freckles, outfit, art style if not photographic). Keep the replacement character's identity, outfit and art style from <Picture 1>. Preserve the source video's camera, room, background, lighting, objects and all other people. Match the target person's position, scale, pose and movement. Do not show the reference sheet or its background. The character's face is shown in <Picture 2>."
    }
   },
   {
@@ -450,14 +450,14 @@
     1004
    ],
    "flags": {},
-   "order": 9,
+   "order": 8,
    "mode": 0,
    "inputs": [
     {
      "localized_name": "model",
      "name": "model",
      "type": "MODEL",
-     "link": 9
+     "link": 2
     },
     {
      "localized_name": "vae",
@@ -490,7 +490,7 @@
      "name": "ref_image_2",
      "shape": 7,
      "type": "IMAGE",
-     "link": null
+     "link": 13
     },
     {
      "localized_name": "ref_image_3",
@@ -807,6 +807,16 @@
       "name": "upload"
      },
      "link": null
+    },
+    {
+     "localized_name": "source_face",
+     "name": "source_face",
+     "shape": 7,
+     "type": "COMBO",
+     "widget": {
+      "name": "source_face"
+     },
+     "link": null
     }
    ],
    "outputs": [
@@ -844,15 +854,15 @@
    "widgets_values": [
     "(use source_video)",
     "(prompt comes from prompt_text: this field is ignored while the socket is connected)",
-    "longtake_style",
+    "character_swap_v2",
     896,
     576,
     124,
     "5",
     0,
     "fixed",
-    4,
-    "euler",
+    8,
+    "res_multistep",
     "simple",
     "continue",
     0,
@@ -869,23 +879,23 @@
     0,
     0,
     "keyframe",
-    "guide",
+    "reference",
     "color",
-    "keep",
+    "blur_keep_mouth",
     "image"
    ],
    "widgets_values_named": {
     "source_file": "(use source_video)",
     "prompt": "(prompt comes from prompt_text: this field is ignored while the socket is connected)",
-    "project_name": "longtake_style",
+    "project_name": "character_swap_v2",
     "width": 896,
     "height": 576,
     "clip_frames": 124,
     "context_frames": "5",
     "seed": 0,
     "control_after_generate": "fixed",
-    "steps": 4,
-    "sampler_name": "euler",
+    "steps": 8,
+    "sampler_name": "res_multistep",
     "scheduler": "simple",
     "mode": "continue",
     "redo_from_clip": 0,
@@ -902,9 +912,9 @@
     "start_seconds": 0,
     "end_seconds": 0,
     "anchor_mode": "keyframe",
-    "source_role": "guide",
+    "source_role": "reference",
     "seam_match": "color",
-    "source_face": "keep",
+    "source_face": "blur_keep_mouth",
     "upload": "image"
    }
   },
@@ -920,7 +930,7 @@
     260
    ],
    "flags": {},
-   "order": 10,
+   "order": 9,
    "mode": 2,
    "inputs": [
     {
@@ -1002,20 +1012,47 @@
     }
    },
    "widgets_values": [
-    "longtake_style",
-    "longtake_style_final",
+    "longtake",
+    "longtake_final",
     "(auto from project)",
     0
    ],
    "widgets_values_named": {
-    "project_name": "longtake_style",
-    "output_name": "longtake_style_final",
+    "project_name": "longtake",
+    "output_name": "longtake_final",
     "audio_file": "(auto from project)",
     "expected_clips": 0
    }
   },
   {
    "id": 10,
+   "type": "MarkdownNote",
+   "pos": [
+    -900,
+    -560
+   ],
+   "size": [
+    1500,
+    480
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "title": "README: H3 LongTake character swap v2 (Character Swap LoRA)",
+   "properties": {},
+   "widgets_values": [
+    "## H3 LongTake: character swap v2 (Character Swap LoRA)\n\nThe person in the source video is replaced by the character of `<Picture 1>`, keeping room, motion and camera of `<Video 1>`.\n\n**What is different from the v1 workflow**\n- The [Character Swap LoRA by akatz-ai](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA) (`h3_character_swap_pro4500_1000.safetensors` in `models/loras`, strength 1.0) with the **Turbo 8-step 768p** LoRA, `res_multistep` / `simple`, 8 steps: the configuration the LoRA author tested. Plus **shift 10/3**, our setting for a 0.5 MP base.\n- The LoRA works best on 4-5 s shots: those are our clips, each one gets its own slice of the source as `<Video 1>`.\n- **A close-up of the face as `<Picture 2>`** (`ref_image_2`): measured +0.04-0.05 likeness at no cost. A multi-view sheet as `<Picture 3>` gave nothing more on our test.\n- **`source_face = blur_keep_mouth`** on the Render: the face of the person in the `<Video 1>` slice is blurred except the mouth, so the identity comes from your pictures only and lip sync survives. It matters when the source person's identity leaks into the result (measured: likeness to the character 0.41 -> 0.52, to the source person 0.41 -> 0.22); with a character very different from the source person it changes little. `blur` blurs the mouth too (still mouth: dances, gestures). Needs insightface.\n\n**Prompt**: the formula the LoRA was trained on, \"Replace only <who, with a visible detail> in <Video 1> with the character in <Picture 1>: ...\". Name the target by something visible (\"the man in the purple shirt\"), describe hair, distinctive face traits and outfit, **no expression instructions** (they can switch the swap off). See *Character swap* in `docs/PROMPTING.md` for an instruction you can give an LLM to write it.\n\n**Measured** on a 14 s TikTok (3 clips), against the v1 workflow with a head-swap LoRA: background twice as faithful (difference 34 -> 18), likeness 0.21 -> 0.32 with the face close-up, same motion; the bag and top of the character appear, and nothing of the source person's necklace remains.\n\nSometimes a clip changes only the clothes and keeps the old face: redo that clip (`mode = redo_one`, `redo_from_clip`) with another seed.\n\nSteps: `dry_run=true` -> `max_clips=2` -> `max_clips=0` -> Ctrl+M on the Stitch."
+   ],
+   "widgets_values_named": {
+    "text": "## H3 LongTake: character swap v2 (Character Swap LoRA)\n\nThe person in the source video is replaced by the character of `<Picture 1>`, keeping room, motion and camera of `<Video 1>`.\n\n**What is different from the v1 workflow**\n- The [Character Swap LoRA by akatz-ai](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA) (`h3_character_swap_pro4500_1000.safetensors` in `models/loras`, strength 1.0) with the **Turbo 8-step 768p** LoRA, `res_multistep` / `simple`, 8 steps: the configuration the LoRA author tested. Plus **shift 10/3**, our setting for a 0.5 MP base.\n- The LoRA works best on 4-5 s shots: those are our clips, each one gets its own slice of the source as `<Video 1>`.\n- **A close-up of the face as `<Picture 2>`** (`ref_image_2`): measured +0.04-0.05 likeness at no cost. A multi-view sheet as `<Picture 3>` gave nothing more on our test.\n- **`source_face = blur_keep_mouth`** on the Render: the face of the person in the `<Video 1>` slice is blurred except the mouth, so the identity comes from your pictures only and lip sync survives. It matters when the source person's identity leaks into the result (measured: likeness to the character 0.41 -> 0.52, to the source person 0.41 -> 0.22); with a character very different from the source person it changes little. `blur` blurs the mouth too (still mouth: dances, gestures). Needs insightface.\n\n**Prompt**: the formula the LoRA was trained on, \"Replace only <who, with a visible detail> in <Video 1> with the character in <Picture 1>: ...\". Name the target by something visible (\"the man in the purple shirt\"), describe hair, distinctive face traits and outfit, **no expression instructions** (they can switch the swap off). See *Character swap* in `docs/PROMPTING.md` for an instruction you can give an LLM to write it.\n\n**Measured** on a 14 s TikTok (3 clips), against the v1 workflow with a head-swap LoRA: background twice as faithful (difference 34 -> 18), likeness 0.21 -> 0.32 with the face close-up, same motion; the bag and top of the character appear, and nothing of the source person's necklace remains.\n\nSometimes a clip changes only the clothes and keeps the old face: redo that clip (`mode = redo_one`, `redo_from_clip`) with another seed.\n\nSteps: `dry_run=true` -> `max_clips=2` -> `max_clips=0` -> Ctrl+M on the Stitch."
+   },
+   "color": "#432",
+   "bgcolor": "#653"
+  },
+  {
+   "id": 11,
    "type": "LoraLoaderModelOnly",
    "pos": [
     -380,
@@ -1026,14 +1063,14 @@
     90
    ],
    "flags": {},
-   "order": 8,
+   "order": 7,
    "mode": 0,
    "inputs": [
     {
      "localized_name": "model",
      "name": "model",
      "type": "MODEL",
-     "link": 2
+     "link": 11
     },
     {
      "localized_name": "lora_name",
@@ -1060,11 +1097,10 @@
      "name": "MODEL",
      "type": "MODEL",
      "links": [
-      9
+      12
      ]
     }
    ],
-   "title": "StyleTransfer LoRA (NRDX): 1.0, or 0.7",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -1076,40 +1112,148 @@
     }
    },
    "widgets_values": [
-    "minimax_h3_style_transfer_v1.0_r64.safetensors",
-    1
+    "h3_character_swap_pro4500_1000.safetensors",
+    1.0
    ],
    "widgets_values_named": {
-    "lora_name": "minimax_h3_style_transfer_v1.0_r64.safetensors",
-    "strength_model": 1
+    "lora_name": "h3_character_swap_pro4500_1000.safetensors",
+    "strength_model": 1.0
+   },
+   "title": "Character Swap LoRA (akatz-ai), strength 1.0"
+  },
+  {
+   "id": 12,
+   "type": "MiniMaxH3SigmaShift",
+   "pos": [
+    -380,
+    260
+   ],
+   "size": [
+    340,
+    82
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "title": "Shift 10/3 (low-MP base; stock is 12/3)",
+   "inputs": [
+    {
+     "localized_name": "model",
+     "name": "model",
+     "type": "MODEL",
+     "link": 12
+    },
+    {
+     "localized_name": "shift_video",
+     "name": "shift_video",
+     "type": "FLOAT",
+     "widget": {
+      "name": "shift_video"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "shift_audio",
+     "name": "shift_audio",
+     "type": "FLOAT",
+     "widget": {
+      "name": "shift_audio"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "MODEL",
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      2
+     ]
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MiniMaxH3SigmaShift",
+    "cnr_id": "comfy-core"
+   },
+   "widgets_values": [
+    10.0,
+    3.0
+   ],
+   "widgets_values_named": {
+    "shift_video": 10.0,
+    "shift_audio": 3.0
    }
   },
   {
-   "id": 11,
-   "type": "MarkdownNote",
+   "id": 13,
+   "type": "LoadImage",
    "pos": [
     -900,
-    -560
+    920
    ],
    "size": [
-    1500,
-    480
+    418.898046875,
+    380
    ],
    "flags": {},
-   "order": 6,
+   "order": 4,
    "mode": 0,
-   "inputs": [],
-   "outputs": [],
-   "title": "README — H3 LongTake style transfer / retexture",
-   "properties": {},
+   "inputs": [
+    {
+     "localized_name": "immagine",
+     "name": "image",
+     "type": "COMBO",
+     "widget": {
+      "name": "image"
+     },
+     "link": null
+    },
+    {
+     "localized_name": "scegli file da caricare",
+     "name": "upload",
+     "type": "IMAGEUPLOAD",
+     "widget": {
+      "name": "upload"
+     },
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "localized_name": "IMMAGINE",
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      13
+     ]
+    },
+    {
+     "localized_name": "MASK",
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "title": "<Picture 2>: a close-up of the character's face",
+   "properties": {
+    "cnr_id": "comfy-core",
+    "ver": "0.36.0",
+    "Node name for S&R": "LoadImage",
+    "ue_properties": {
+     "widget_ue_connectable": {},
+     "version": "7.8",
+     "input_ue_unconnectable": {}
+    }
+   },
    "widgets_values": [
-    "## H3 LongTake — Style transfer / retexture (guide latent + StyleTransfer LoRA)\n\nWith `source_role=guide` the slice of the source is a **guide latent** anchored to frame 0 for the whole clip: frame-accurate motion and framing (adherence 0.93 vs 0.57 with Ref2VA), and NRDX's StyleTransfer LoRA re-renders it in the style of `<Picture 1>` or of the text.\n\n- Prompt: `style_transfer: Re-render this video with the style of <Picture 1>: <style words>. Keep the original scene, background and framing exactly as in the video; do not add any scenery from <Picture 1>.` — or `retexture: change the <garment> to <material/colour>, keeping everything else unchanged.`\n- Style picture: a **swatch** without faces or scenery (a picture with a skyline gets copied as content). Named styles (Van Gogh, Ghibli, Simpsons…) work with text only, no picture.\n- `guide+reference` adds `<Video 1>` too (exact sync + identity); `guide_retexture` is the text-only retexture template.\n\nMeasured defaults: `context_frames=5`, `anchor_mode=keyframe`, `seam_match=color` (ΔE at the seam 5.8 → 0.9), LoRA 1.0 (0.7 if it alters faces), 4 Turbo steps."
+    "example.png",
+    "image"
    ],
    "widgets_values_named": {
-    "text": "## H3 LongTake — Style transfer / retexture (guide latent + StyleTransfer LoRA)\n\nWith `source_role=guide` the slice of the source is a **guide latent** anchored to frame 0 for the whole clip: frame-accurate motion and framing (adherence 0.93 vs 0.57 with Ref2VA), and NRDX's StyleTransfer LoRA re-renders it in the style of `<Picture 1>` or of the text.\n\n- Prompt: `style_transfer: Re-render this video with the style of <Picture 1>: <style words>. Keep the original scene, background and framing exactly as in the video; do not add any scenery from <Picture 1>.` — or `retexture: change the <garment> to <material/colour>, keeping everything else unchanged.`\n- Style picture: a **swatch** without faces or scenery (a picture with a skyline gets copied as content). Named styles (Van Gogh, Ghibli, Simpsons…) work with text only, no picture.\n- `guide+reference` adds `<Video 1>` too (exact sync + identity); `guide_retexture` is the text-only retexture template.\n\nMeasured defaults: `context_frames=5`, `anchor_mode=keyframe`, `seam_match=color` (ΔE at the seam 5.8 → 0.9), LoRA 1.0 (0.7 if it alters faces), 4 Turbo steps."
-   },
-   "color": "#432",
-   "bgcolor": "#653"
+    "image": "example.png",
+    "upload": "image"
+   }
   }
  ],
  "links": [
@@ -1123,9 +1267,9 @@
   ],
   [
    2,
-   2,
+   12,
    0,
-   10,
+   7,
    0,
    "MODEL"
   ],
@@ -1178,12 +1322,28 @@
    "STRING"
   ],
   [
-   9,
-   10,
+   11,
+   2,
    0,
-   7,
+   11,
    0,
    "MODEL"
+  ],
+  [
+   12,
+   11,
+   0,
+   12,
+   0,
+   "MODEL"
+  ],
+  [
+   13,
+   13,
+   0,
+   7,
+   5,
+   "IMAGE"
   ]
  ],
  "groups": [

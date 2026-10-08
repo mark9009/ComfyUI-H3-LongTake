@@ -74,8 +74,13 @@ the PATH. No other Python dependency.
 - **`only first/last keyframe anchors are supported`**: ComfyUI older than 0.34.0. Every clip after the first is
   anchored to the previous one with keyframes inside the clip, which ComfyUI supports from 0.34.0. Update ComfyUI;
   from 1.3.3 the node says so in the error.
-- **A workflow asks for `H3LongTakeFaceRefine` or an `object_image` input**: it comes from the author's development
-  build (for example a workflow embedded in a gallery video), not from a public release. Use the workflows in `workflow/`.
+- **A workflow embedded in a gallery video asks for `H3ChainDirector`**: that is the author's private prompt-writing
+  tool, not part of this pack. Delete that node and write the prompt blocks yourself (or with the instruction in
+  `docs/PROMPTING.md`); everything else in those workflows (FaceRefine, `object_image`, H3 Video File, H3 LoRA Tags)
+  is in this pack from 1.3.4.
+- **An older workflow shows odd values in `source_face` or the Refine's `detail`**: ComfyUI stores widget values by
+  position, so workflows saved before those inputs existed carry a neighbouring value there. From 1.3.4 the nodes
+  accept it (`keep` / 0, noted in the report); re-save the workflow to clean it up.
 
 ### Models
 
@@ -89,6 +94,9 @@ the PATH. No other Python dependency.
 | Turbo LoRA, 8 steps (optional) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` (`models/loras`) | lightx2v v1.0, strength 1.0, `steps = 8`: steadier video and better faces in profiles, 2× the sampling time — recommended for the Refine (see *Face fidelity*) |
 | H3 latent upscaler (optional, Refine) | `minimax_h3_latent_upscaler_3d_fp16.safetensors` (`models/latent_upscale_models`) + the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) node pack | used by the Refine's `upscale = latent_model` (default): faster and much more detail; without it the Refine falls back to the pixel upscale and says so in its report |
 | StyleTransfer LoRA (optional) | `minimax_h3_style_transfer_v1.0_r64.safetensors` (`models/loras`) | [NRDX on Civitai](https://civitai.com/models/2932297) — needed only for `source_role = guide` |
+| Character Swap LoRA (optional) | `h3_character_swap_pro4500_1000.safetensors` (`models/loras`) | [akatz-ai on Hugging Face](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA), strength 1.0 — for character swap, see *Character swap with the Character Swap LoRA* |
+| insightface (optional) | `buffalo_l` in `models/insightface` + `pip install insightface onnxruntime` | only for the Render's `source_face` (downloaded on first use) |
+| ComfyUI-H3-FaceRefine (optional) | [Carasibana's node pack](https://github.com/Carasibana/ComfyUI-H3-FaceRefine) + a YOLO face detector (`face_yolov8m.pt` in `models/ultralytics`) | only for the H3 LongTake FaceRefine node |
 
 The example workflows reference these file names; pick your own text-encoder file in the `CLIPLoader`.
 
@@ -99,6 +107,8 @@ The example workflows reference these file names; pick your own text-encoder fil
 1. Load `workflow/H3_LongTake_example.json` (motion + identity), `workflow/H3_LongTake_character_swap.json`
    (a picture's character performs the video), `workflow/H3_LongTake_style.json` (style transfer / retexture) or
    `workflow/H3_LongTake_i2v.json` (a long video from a single image, one prompt block per clip, with the second pass).
+   From 1.3.4 also `workflow/H3_LongTake_character_swap_v2.json` (character swap with the Character Swap LoRA and
+   `source_face`) and `workflow/H3_LongTake_i2v_facerefine.json` (Image to Video + FaceRefine on the small faces).
 2. Put your source video in `ComfyUI/input/` and select it in `source_file`; connect your picture(s) to
    `ref_image_1..3`.
 3. Set `dry_run = true` and queue: the node prints the slicing plan (how many clips, how long).
@@ -202,6 +212,7 @@ Settings unless noted: `source_role = guide`, `context_frames = 5`, `anchor_mode
 | `dry_run` | print the plan only |
 | `use_source_audio` | source audio as `<Video 1>`'s soundtrack (lip-sync; costs tokens) |
 | `ref_video_size` | `match` (default): `<Video 1>` scaled to the output area · `native`: the core node's 768 canvas |
+| `source_face` | character swap (1.3.4): `keep` (default), `blur` or `blur_keep_mouth` on the face of the person in the `<Video 1>` slice. Blurred, that face no longer passes its identity on to the result, which takes it from your pictures; `blur_keep_mouth` leaves the mouth visible so lip sync survives. Measured (Character Swap LoRA, 2 seeds × 2 clips): likeness to the character 0.41 → 0.52, to the source person 0.41 → 0.22, lip sync 0.63 → 0.55 (0.03 with `blur`). It matters when the source person's identity leaks into the result; with a character very different from the source person it changes little. Needs insightface (CPU, ~1 s per 3 frames); `clip_NNN_ref.mp4` shows what the model received |
 | `text_cond` | experimental: frozen text embedding of a MiniMax H3 finetune (e.g. Viggle-Animate's `Load Text Conditioning`) instead of `clip`; the prompt is ignored and only `ref_image_1` is used. Not recommended for production: the finetune we tested syncs motion frame-accurately but renders softer faces and needs a still matching the first frame.
 
 Outputs: `last_clip`, `project_dir`, `report`. The node shows a preview of every chunk present (`preview.mp4`,
@@ -244,6 +255,8 @@ the preview and the Stitch concatenate it.
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone) in every clip: the strongest anchor for the face. The node prepends the reference tags to the prompt |
 | `character_sheet` | a character sheet (several views in one image) as the **last** `<Picture N>` in every clip. The node tags it *"the same person seen from several angles in"*, so the model reads the views as one person instead of several. Use it **on top of** `identity_reference` / `face_image`, not instead of them (see below) |
 | `aspect` / `megapixels` | canvas: `source` = `start_image`'s aspect |
+| `object_image` | experimental, not measured: an object to keep the same in every clip (e.g. a mug with its logo) as the last `<Picture N>`, with a sentence that names it; a sharp logo on a flat background (ref2va) |
+| `reference_strength`, `master_shot_context`, `detail`, `seam_fade` | measured, **no gain** over run-to-run noise: kept at their neutral defaults (1.0 / off / 0 / off) so workflows that set them still load. `reference_strength` mixes the references towards noise; `master_shot_context` passes clip 0 as `<Video 1>` (doubles the time per step); `detail` is the Detail Daemon timestep shift (4-8 turbo steps touch too few sigmas); `seam_fade` is a 12 ms audio ramp at the joins (with `audio_context` there is no click to remove) |
 | the rest | as the Render (`context_frames`, `anchor_mode`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
 
 Workflow: `workflow/H3_LongTake_i2v.json` (Refine and Stitch muted, Ctrl+M to enable them). Every shipped workflow
@@ -306,6 +319,7 @@ protected by the mask). The `hr` folder has its own `plan.json`: the Stitch asse
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone): the second pass **restores the picture's face on the whole video**, even where the first pass lost it |
 | `character_sheet` | the same sheet you gave the Render, as the last `<Picture N>`: connecting it to only one of the two passes leaves them working from different references |
 | `upscale` | `latent_model` (default, 1.3.0): the H3 latent upscaler, without going through the VAE. Needs the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) pack and `minimax_h3_latent_upscaler_3d_fp16.safetensors` in `models/latent_upscale_models`. Without them, with `frames_from = mp4` or with a canvas smaller than the source it uses `pixel` (decode, lanczos, re-encode); the report says which one ran |
+| `detail` | Detail Daemon timestep shift: measured, no gain with 4-8 turbo steps; leave it at 0 |
 | `frames_from` | `latent` (default) or `mp4`: with `mp4` the clip's new frames are read from its `clip_XXX.mp4` chunk instead of the latent, to refine chunks you edited in pixels (a face fix, a colour grade); the context frames stay from the latent |
 
 Latent upscaler against `pixel` (416×608 → 832×1216, denoise 0.4 / 4 steps, same references and seed): **253 s
@@ -357,6 +371,69 @@ Recommendations that follow:
   re-generates only the face with H3 (ComfyUI-H3-FaceRefine) keeps H3's skin but gains only +0.05 on a 1.0 MP
   video, and needs a guard that puts the original frame back where no face is visible (hair, turned head), or H3
   paints the wall where the face should be. Both are post-production, outside this node pack.
+
+### Character swap with the Character Swap LoRA (1.3.4)
+
+The [Character Swap LoRA by akatz-ai](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA) was trained to
+replace one person in a video with the character of a picture, and its author found it reliable on **4-5 s shots**
+and drifting on longer ones. That is exactly how LongTake works: every 5 s clip gets its own slice of the source as
+`<Video 1>`. Workflow: `workflow/H3_LongTake_character_swap_v2.json`.
+
+Setup: the Character Swap LoRA at 1.0 on the ref2va, Turbo **8-step v1.0 768p** (8 steps, `res_multistep` /
+`simple`, the configuration the LoRA author tested) and shift 10/3 for a 0.5 MP base; the character picture as
+`ref_image_1`, a **close-up of the face as `ref_image_2`**, and the prompt in the formula the LoRA was trained on:
+
+> Replace only *the woman in the green sweater* in `<Video 1>` with the character in `<Picture 1>`: *hair, distinctive
+> face traits (makeup, piercings, glasses, freckles), outfit*. Keep the replacement character's identity, outfit and
+> art style from `<Picture 1>`. Preserve the source video's camera, *place*, background, lighting, objects and all
+> other people. Match the target person's position, scale, pose and movement. Do not show the reference sheet or its
+> background. The character's face is shown in `<Picture 2>`.
+
+Name the target by something visible, and **do not add expression instructions**: the LoRA author found they can
+switch the swap off. `docs/PROMPTING.md` has an instruction you can give a vision LLM to write this prompt from the
+character picture.
+
+What we measured (ArcFace to the character's face; "source" = to the person in the source video; background =
+mean difference from the source in the side strips, lower = more faithful):
+
+| test | setup | character | source | background | time |
+|---|---|---|---|---|---|
+| synthetic, 10 s, 2 seeds | v1 workflow (Turbo 4-step, no LoRA) | 0.38 | 0.43 | 18.2 | 421 s |
+| | Turbo 8-step, same prompt, no LoRA | 0.37 | 0.43 | 18.8 | 656 s |
+| | **+ Character Swap LoRA** | 0.41 | 0.41 | **15.1** | 646 s |
+| | + LoRA + `source_face = blur_keep_mouth` | **0.52** | **0.22** | 15.9 | 675 s |
+| real 14 s TikTok, 1 seed | a head-swap LoRA, Turbo 4-step | 0.21 | ≈0 | 34.0 | |
+| | Character Swap LoRA + Turbo 8-step | 0.27 | ≈0 | 18.3 | 995 s |
+| | **+ face close-up as `ref_image_2`** | **0.32** | ≈0 | 17.7 | 1075 s |
+| | + a multi-view sheet as `ref_image_3` | 0.32 | ≈0 | 17.6 | 1215 s |
+
+- The LoRA alone keeps the scene: background about **20 % closer to the source**, on every seed.
+- `source_face = blur_keep_mouth` is the big step **when the source person's identity leaks into the result** (two
+  women of similar look: 0.41 → 0.52 to the character); lip sync stays (correlation 0.55 against 0.63). When the
+  character is very different from the source person (the TikTok test) the source identity is already gone and it
+  changes nothing.
+- The face close-up as `<Picture 2>` helps for free; a multi-view sheet on top did not, here.
+- Motion follows the source the same way in every setup (wrist/elbow error 12.5-12.7 % of the frame height).
+- Limit: the likeness still falls clip after clip on the long TikTok (0.40 → 0.27). For small faces in wide shots,
+  FaceRefine (below) is the tool.
+
+### H3 LongTake FaceRefine (1.3.4)
+
+Regenerates **small faces** clip by clip on a rendered project and writes `<project>/fr`, which the Stitch assembles
+with the audio. It drives the nodes of [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine)
+(Carasibana), which must be installed (a dialog says so if it is missing); FaceRefine's model must be the **ref2va**
+with a Turbo LoRA, and `face_image` a close-up. Clips whose median face is taller than `max_face_px` (150) are copied
+as they are: there FaceRefine gains nothing. Measured on a 15 s take with a wide closing shot at 0.55 MP: face identity
+in the wide shot 0.25-0.33 → 0.63-0.67, face steady on the head (slip < 1.5 % of the side), flicker +2 %, 3.5 min.
+Inputs: `denoise` 0.25-0.35 (above, the head drifts against the body), `description` (hair and outfit),
+`seam_blend_frames` (fade to the original at the inner joins). Workflow: `workflow/H3_LongTake_i2v_facerefine.json`.
+
+### H3 Video File and H3 LoRA Tags (1.3.4)
+
+Two small helpers for Civitai metadata with Image Saver: **H3 Video File** turns a saved mp4 path (the Stitch's
+`path`) into `VHS_FILENAMES` plus its real width and height, for *Image Saver Video Metadata*; **H3 LoRA Tags** reads
+the LoRAs applied to the connected MODEL from the graph and returns `<lora:name:strength>` tags and the base model name,
+for *Image Saver Metadata*.
 
 ---
 

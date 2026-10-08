@@ -1,10 +1,10 @@
-// Stitch and Refine: with the `project_dir` input linked the node works on the folder it
-// receives and ignores `project_name` (see longtake_nodes.py). Here the field is greyed out
+// Stitch, Refine and FaceRefine: with the `project_dir` input linked the node works on the folder it
+// receives and ignores `project_name` (see longtake_nodes.py and facerefine_node.py). Here the field is greyed out
 // and its label says so, so the old name still shown does not mislead; unlinking restores it.
 // The value stays in the workflow.
 import { app } from "../../scripts/app.js";
 
-const NODES = ["H3LongTakeStitch", "H3LongTakeRefine"];
+const NODES = ["H3LongTakeStitch", "H3LongTakeRefine", "H3LongTakeFaceRefine"];
 const LABEL = "project_name (ignored: uses project_dir)";
 
 function sync(node) {

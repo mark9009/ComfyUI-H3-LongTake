@@ -1,8 +1,8 @@
 {
- "id": "1f0d3c2a-7b1e-4d6a-9c1f-0a2b4c6d8e10",
+ "id": "ae98444e-5b78-488f-868d-8e201a966280",
  "revision": 0,
- "last_node_id": 14,
- "last_link_id": 21,
+ "last_node_id": 25,
+ "last_link_id": 28,
  "nodes": [
   {
    "id": 1,
@@ -119,7 +119,7 @@
      ]
     }
    ],
-   "title": "Turbo LoRA of the model (fl2v / ref2v)",
+   "title": "Turbo LoRA matching the model (fl2v / ref2v)",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -190,7 +190,8 @@
      "type": "CLIP",
      "links": [
       10,
-      16
+      16,
+      24
      ]
     }
    ],
@@ -247,7 +248,8 @@
      "type": "VAE",
      "links": [
       11,
-      17
+      17,
+      25
      ]
     }
    ],
@@ -442,7 +444,7 @@
      "links": null
     }
    ],
-   "title": "face_image (optional, ref2va): face close-up",
+   "title": "face_image (optional, ref2va): close-up",
    "properties": {
     "cnr_id": "comfy-core",
     "ver": "0.36.0",
@@ -732,6 +734,60 @@
       "name": "chunk_crf"
      },
      "link": null
+    },
+    {
+     "localized_name": "character_sheet",
+     "name": "character_sheet",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    },
+    {
+     "localized_name": "reference_strength",
+     "name": "reference_strength",
+     "shape": 7,
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "reference_strength"
+     }
+    },
+    {
+     "localized_name": "master_shot_context",
+     "name": "master_shot_context",
+     "shape": 7,
+     "type": "BOOLEAN",
+     "link": null,
+     "widget": {
+      "name": "master_shot_context"
+     }
+    },
+    {
+     "localized_name": "detail",
+     "name": "detail",
+     "shape": 7,
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "detail"
+     }
+    },
+    {
+     "localized_name": "seam_fade",
+     "name": "seam_fade",
+     "shape": 7,
+     "type": "BOOLEAN",
+     "link": null,
+     "widget": {
+      "name": "seam_fade"
+     }
+    },
+    {
+     "localized_name": "object_image",
+     "name": "object_image",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
     }
    ],
    "outputs": [
@@ -747,7 +803,7 @@
      "type": "STRING",
      "links": [
       18,
-      20
+      27
      ]
     },
     {
@@ -791,7 +847,11 @@
     "keyframe",
     true,
     "color",
-    10
+    10,
+    1.0,
+    false,
+    0.0,
+    false
    ],
    "widgets_values_named": {
     "prompts": "A slow cinematic push-in on the subject; natural light, ambient sound.\n---\nThe subject turns and walks away from the camera.",
@@ -816,7 +876,11 @@
     "anchor_mode": "keyframe",
     "audio_context": true,
     "seam_match": "color",
-    "chunk_crf": 10
+    "chunk_crf": 10,
+    "reference_strength": 1.0,
+    "master_shot_context": false,
+    "detail": 0.0,
+    "seam_fade": false
    }
   },
   {
@@ -983,24 +1047,41 @@
      "link": null
     },
     {
+     "localized_name": "character_sheet",
+     "name": "character_sheet",
+     "shape": 7,
+     "type": "IMAGE",
+     "link": null
+    },
+    {
      "localized_name": "frames_from",
      "name": "frames_from",
      "shape": 7,
      "type": "COMBO",
+     "link": null,
      "widget": {
       "name": "frames_from"
-     },
-     "link": null
+     }
+    },
+    {
+     "localized_name": "detail",
+     "name": "detail",
+     "shape": 7,
+     "type": "FLOAT",
+     "link": null,
+     "widget": {
+      "name": "detail"
+     }
     },
     {
      "localized_name": "upscale",
      "name": "upscale",
      "shape": 7,
      "type": "COMBO",
+     "link": null,
      "widget": {
       "name": "upscale"
-     },
-     "link": null
+     }
     }
    ],
    "outputs": [
@@ -1023,7 +1104,7 @@
      "links": null
     }
    ],
-   "title": "Refine, 2nd pass (Ctrl+M after the clips)",
+   "title": "Refine, second pass (Ctrl+M when the clips are done)",
    "properties": {
     "cnr_id": "comfyui-h3-longtake",
     "ver": "1.3.4",
@@ -1084,7 +1165,7 @@
    ],
    "flags": {},
    "order": 10,
-   "mode": 2,
+   "mode": 0,
    "inputs": [
     {
      "localized_name": "source_audio",
@@ -1098,7 +1179,7 @@
      "name": "project_dir",
      "shape": 7,
      "type": "STRING",
-     "link": 20
+     "link": 28
     },
     {
      "localized_name": "project_name",
@@ -1153,7 +1234,7 @@
      "links": null
     }
    ],
-   "title": "STITCH (Ctrl+M): project_dir from I2V or Refine",
+   "title": "STITCH: assembles <project>/fr (refined + copied clips)",
    "properties": {
     "cnr_id": "comfyui-h3-longtake",
     "ver": "1.3.4",
@@ -1167,13 +1248,13 @@
    "widgets_values": [
     "longtake",
     "longtake_i2v_final",
-    "(auto from project)",
+    "(auto dal progetto)",
     0
    ],
    "widgets_values_named": {
     "project_name": "longtake",
     "output_name": "longtake_i2v_final",
-    "audio_file": "(auto from project)",
+    "audio_file": "(auto dal progetto)",
     "expected_clips": 0
    }
   },
@@ -1193,16 +1274,263 @@
    "mode": 0,
    "inputs": [],
    "outputs": [],
-   "title": "README — H3 LongTake Image to Video",
+   "title": "README: H3 LongTake Image -> Video",
    "properties": {},
    "widgets_values": [
-    "## H3 LongTake — Image to Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with only one clip in VRAM/RAM: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip is written to `output/h3_longtake/<project_name>/` with the audio H3 generates; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image to Video**\n- `start_image`: the first frame (keyframe at frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0–5 s, 5–10 s, …); the last block repeats. Describe the action of each stretch; the character is fixed by the picture (and by the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (a close-up as <Picture 2>). Measured over 30 s: no reference → the face drifts to another person by 20 s (ArcFace 0.27); face reference → 0.60.\n- Workflow: `dry_run=true` → check the plan and the clip → prompt table; then `max_clips=1` to check the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)** — video \"hires fix\", clip by clip: 0.5 MP → 1.0 MP with `denoise 0.25` (0.4 regenerates more). Adds real skin/hair detail and, with `ref_image_1` + `face_image`, **restores the picture's face on the whole video** even when the first pass lost it (measured: 0.27 → 0.62 over 30 s, seams unchanged). `upscale = latent_model` (1.3.0) enlarges the latent with the H3 latent upscaler: install the *Comfyui_Minimax_h3_latent_Upscaler* pack and put `minimax_h3_latent_upscaler_3d_fp16.safetensors` in `models/latent_upscale_models` (measured: 253 s instead of 375 s per clip, 2.6× the face detail); without them it falls back to the pixel upscale (~5.7 min per clip) and the report says so. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)** — assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image to Video (first pass) or from Refine (second pass). With the Render in `dry_run`, Refine and Stitch stop with a message.\n\nTips: keep 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults; steps 4 / Turbo 0.95 — more steps, lower strength or a sigma shift do not reduce grain."
+    "## H3 LongTake: Image -> Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with one clip in VRAM/RAM at a time: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip lands in `output/h3_longtake/<project_name>/` with the audio generated by H3; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image -> Video**\n- `start_image`: the first frame (keyframe on frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0-5 s, 5-10 s, ...); the last one repeats. Describe the action of each stretch; the character is fixed by the picture (and the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (close-up as <Picture 2>). Measured over 30 s: without a reference the face becomes another person within 20 s (ArcFace 0.27); with the face 0.60.\n- Flow: `dry_run=true` -> check the plan and the clip table -> prompts; then `max_clips=1` for the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)**: video \"hires fix\", clip by clip, 0.5 MP -> 1.0 MP. With `upscale = latent_model` (default; needs the Comfyui_Minimax_h3_latent_Upscaler pack and its model) it enlarges the latent without the VAE round trip: measured a third faster and much sharper faces at denoise 0.4 / 4 steps. With `ref_image_1` + `face_image` it puts the picture's face back on the whole video. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)**: assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image -> Video, the Refine or FaceRefine.\n\nTips: 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults."
    ],
    "widgets_values_named": {
-    "text": "## H3 LongTake — Image to Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with only one clip in VRAM/RAM: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip is written to `output/h3_longtake/<project_name>/` with the audio H3 generates; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image to Video**\n- `start_image`: the first frame (keyframe at frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0–5 s, 5–10 s, …); the last block repeats. Describe the action of each stretch; the character is fixed by the picture (and by the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (a close-up as <Picture 2>). Measured over 30 s: no reference → the face drifts to another person by 20 s (ArcFace 0.27); face reference → 0.60.\n- Workflow: `dry_run=true` → check the plan and the clip → prompt table; then `max_clips=1` to check the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)** — video \"hires fix\", clip by clip: 0.5 MP → 1.0 MP with `denoise 0.25` (0.4 regenerates more). Adds real skin/hair detail and, with `ref_image_1` + `face_image`, **restores the picture's face on the whole video** even when the first pass lost it (measured: 0.27 → 0.62 over 30 s, seams unchanged). ~5.7 min per clip. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)** — assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image to Video (first pass) or from Refine (second pass).\n\nTips: keep 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults; steps 4 / Turbo 0.95 — more steps, lower strength or a sigma shift do not reduce grain."
+    "text": "## H3 LongTake: Image -> Video (+ Refine)\n\n**What it does.** A long video from one picture, clip by clip (124 frames = 5.2 s each), with one clip in VRAM/RAM at a time: 30 s or 5 minutes cost the same memory, only time (~3.2 min per clip at 0.5 MP on 16 GB). Every clip lands in `output/h3_longtake/<project_name>/` with the audio generated by H3; you can stop, resume (`mode=continue`), redo one clip (`redo_one`) and assemble at the end.\n\n**1. Image -> Video**\n- `start_image`: the first frame (keyframe on frame 0). Optional `end_image` = last frame.\n- `prompts`: **one block per clip**, separated by a line with `---`. Block *i* drives clip *i* (0-5 s, 5-10 s, ...); the last one repeats. Describe the action of each stretch; the character is fixed by the picture (and the references), no need to repeat it.\n- Model: **fl2va + Turbo fl2v** without references, or **ref2va + Turbo ref2v** with `identity_reference` (start_image as <Picture 1> in every clip) and/or `face_image` (close-up as <Picture 2>). Measured over 30 s: without a reference the face becomes another person within 20 s (ArcFace 0.27); with the face 0.60.\n- Flow: `dry_run=true` -> check the plan and the clip table -> prompts; then `max_clips=1` for the first clip; then `max_clips=0`.\n\n**2. Refine (second pass, muted: Ctrl+M)**: video \"hires fix\", clip by clip, 0.5 MP -> 1.0 MP. With `upscale = latent_model` (default; needs the Comfyui_Minimax_h3_latent_Upscaler pack and its model) it enlarges the latent without the VAE round trip: measured a third faster and much sharper faces at denoise 0.4 / 4 steps. With `ref_image_1` + `face_image` it puts the picture's face back on the whole video. Output in `<project_name>/hr` (in the Stitch: `project_name = name/hr`).\n\n**3. Stitch (muted: Ctrl+M)**: assembles the chunks without re-encoding, with the generated audio. Connect its `project_dir` from Image -> Video, the Refine or FaceRefine.\n\nTips: 0.5 MP for the first pass on 16 GB; `context_frames=5` and `seam_match=color` are the measured defaults."
    },
    "color": "#432",
    "bgcolor": "#653"
+  },
+  {
+   "id": 20,
+   "type": "UNETLoader",
+   "pos": [
+    780,
+    700
+   ],
+   "size": [
+    400,
+    90
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      22
+     ]
+    }
+   ],
+   "title": "FaceRefine: UNET ref2va (the face goes in as <Picture 1>)",
+   "properties": {
+    "Node name for S&R": "UNETLoader"
+   },
+   "widgets_values": [
+    "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
+    "default"
+   ]
+  },
+  {
+   "id": 21,
+   "type": "LoraLoaderModelOnly",
+   "pos": [
+    780,
+    830
+   ],
+   "size": [
+    400,
+    90
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 22
+    }
+   ],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      23
+     ]
+    }
+   ],
+   "title": "FaceRefine: Turbo ref2v 8-step v1.0",
+   "properties": {
+    "Node name for S&R": "LoraLoaderModelOnly"
+   },
+   "widgets_values": [
+    "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+    0.95
+   ]
+  },
+  {
+   "id": 22,
+   "type": "LoadImage",
+   "pos": [
+    780,
+    960
+   ],
+   "size": [
+    400,
+    320
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      26
+     ]
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null
+    }
+   ],
+   "title": "Face for FaceRefine (a close-up, not the whole photo)",
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "example.png",
+    "image"
+   ]
+  },
+  {
+   "id": 23,
+   "type": "H3LongTakeFaceRefine",
+   "pos": [
+    1230,
+    700
+   ],
+   "size": [
+    440,
+    420
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 23
+    },
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 24
+    },
+    {
+     "name": "vae",
+     "type": "VAE",
+     "link": 25
+    },
+    {
+     "name": "face_image",
+     "type": "IMAGE",
+     "link": 26
+    },
+    {
+     "name": "project_dir",
+     "type": "STRING",
+     "link": 27
+    }
+   ],
+   "outputs": [
+    {
+     "name": "last_clip",
+     "type": "IMAGE",
+     "links": null
+    },
+    {
+     "name": "project_dir",
+     "type": "STRING",
+     "links": [
+      28
+     ]
+    },
+    {
+     "name": "report",
+     "type": "STRING",
+     "links": null
+    }
+   ],
+   "title": "FaceRefine: only the clips with a small face -> <project>/fr",
+   "properties": {
+    "Node name for S&R": "H3LongTakeFaceRefine",
+    "cnr_id": "comfyui-h3-longtake",
+    "ver": "1.3.4"
+   },
+   "widgets_values": [
+    "longtake",
+    "",
+    0.25,
+    4,
+    0,
+    "fixed",
+    150,
+    "continue",
+    0.35,
+    11,
+    2.5,
+    24,
+    10,
+    8
+   ]
+  },
+  {
+   "id": 24,
+   "type": "H3FaceTrackCrop",
+   "pos": [
+    1230,
+    1170
+   ],
+   "size": [
+    440,
+    120
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 4,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": null
+    }
+   ],
+   "outputs": [],
+   "title": "Placeholder: needs ComfyUI-H3-FaceRefine (bypassed, do not connect)",
+   "properties": {
+    "Node name for S&R": "H3FaceTrackCrop",
+    "cnr_id": "comfyui-h3-facerefine",
+    "aux_id": "Carasibana/ComfyUI-H3-FaceRefine"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 25,
+   "type": "MarkdownNote",
+   "pos": [
+    1730,
+    700
+   ],
+   "size": [
+    620,
+    560
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [],
+   "title": "FaceRefine in the take",
+   "properties": {
+    "Node name for S&R": "MarkdownNote"
+   },
+   "widgets_values": [
+    "## Automatic FaceRefine (small faces)\n\n**H3 LongTake FaceRefine** takes the project and, clip by clip, regenerates the face only where it is **small** (wide shot): clips whose median face is above `max_face_px` (150, measured with FaceRefine's tracker) are copied as they are. It writes `<project>/fr`, which the Stitch assembles with the audio.\n\n**Needs** [ComfyUI-H3-FaceRefine](https://github.com/Carasibana/ComfyUI-H3-FaceRefine) (Carasibana). The bypassed \"Placeholder\" node only makes it show up among the Manager's **missing nodes** when it is not installed.\n\n**Measured** (15 s take, wide closing shot, 0.55 MP): face identity in the wide shot 0.25-0.33 -> 0.64-0.66, face steady on the head (< 1% of the side), flicker +2%, 3.5 min. At 1 MP: 0.44 -> 0.61, 4.8 min.\n\n**Knobs**: `denoise` 0.25-0.35; `description` = the subject's hair and outfit; FaceRefine's model must be the **ref2va** (even if the render uses fl2va). To check the clips first, mute (Ctrl+M) FaceRefine and the Stitch: clips already done are not regenerated."
+   ]
   }
  ],
  "links": [
@@ -1303,20 +1631,68 @@
    "IMAGE"
   ],
   [
-   20,
-   11,
-   1,
-   13,
-   1,
-   "STRING"
-  ],
-  [
    21,
    10,
    0,
    12,
    4,
    "IMAGE"
+  ],
+  [
+   22,
+   20,
+   0,
+   21,
+   0,
+   "MODEL"
+  ],
+  [
+   23,
+   21,
+   0,
+   23,
+   0,
+   "MODEL"
+  ],
+  [
+   24,
+   3,
+   0,
+   23,
+   1,
+   "CLIP"
+  ],
+  [
+   25,
+   4,
+   0,
+   23,
+   2,
+   "VAE"
+  ],
+  [
+   26,
+   22,
+   0,
+   23,
+   3,
+   "IMAGE"
+  ],
+  [
+   27,
+   11,
+   1,
+   23,
+   4,
+   "STRING"
+  ],
+  [
+   28,
+   23,
+   1,
+   13,
+   1,
+   "STRING"
   ]
  ],
  "groups": [
