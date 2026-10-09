@@ -1740,9 +1740,11 @@ class H3LongTakeImageRender:
                 "aspect": (ASPECT_CHOICES, {"default": "source",
                            "tooltip": "Canvas aspect: source = start_image's. width/height count only with manual."}),
                 "megapixels": ("FLOAT", {"default": 0.5, "min": 0.1, "max": 2.0, "step": 0.05}),
-                "anchor_mode": (["keyframe", "inpaint", "none"], {"default": "keyframe",
-                                "tooltip": "keyframe: previous clip's latent tail as a guide on frames 0..C-1. "
-                                           "inpaint: tail copied into the latent and protected by the mask. none: independent clips."}),
+                "anchor_mode": (["keyframe", "inpaint", "none"], {"default": "inpaint",
+                                "tooltip": "inpaint: the previous clip's tail is copied into the latent and protected by the "
+                                           "mask, so the model does not redraw it: clean joins (measured: jump at the join "
+                                           "5.4-6.8x with keyframe, 1.5x with inpaint). keyframe: the tail as a guide, the model "
+                                           "redraws it. none: independent clips."}),
                 "audio_context": ("BOOLEAN", {"default": True, "tooltip": "Also carries the previous clip's audio tail."}),
                 "seam_match": (SEAM_MODES, {"default": "color",
                                "tooltip": "Exposure/hue correction of the first 24 frames towards the previous clip (pixels only)."}),
@@ -1788,7 +1790,7 @@ class H3LongTakeImageRender:
                mode, redo_from_clip, max_clips, dry_run,
                end_image=None, identity_reference=False, face_image=None, character_sheet=None,
                prompt_text=None, aspect="source", megapixels=0.5,
-               anchor_mode="keyframe", audio_context=True, seam_match="color", chunk_crf=10,
+               anchor_mode="inpaint", audio_context=True, seam_match="color", chunk_crf=10,
                reference_strength=1.0, master_shot_context=False, detail=0.0, seam_fade=False,
                object_image=None, api_prompt=None, extra_pnginfo=None):
 
@@ -2403,6 +2405,29 @@ class H3LongTakeRefine:
         return {"ui": ui, "result": (last_images if last_images is not None else placeholder, out_dir, report)}
 
 
+def _project_latent(project_dir, n_clips):
+    """AV latent of the whole project: the clip latents one after the other, without the repeated context tokens
+    (5 frames = 2 tokens, cycle 1/4/4/4/4: the clips fit without shifting the phase). For H3 latent upscalers and
+    to decode the whole video in one go. None if a latent is missing."""
+    videos, audios, frames = [], [], 0
+    for i in range(int(n_clips)):
+        latent_path, _ = _clip_paths(project_dir, i)
+        if not os.path.isfile(latent_path):
+            return None
+        saved = torch.load(latent_path, map_location="cpu")
+        video, audio = saved["video"], saved["audio"]
+        ctx = int(saved.get("ctx", 0)) if i > 0 else 0
+        if ctx:
+            video = video[:, :, latent_steps_for_frames(ctx):]
+            audio = audio[..., audio_t_for_frames(ctx):]
+        videos.append(video)
+        audios.append(audio)
+        frames += int(saved.get("new", pixel_frames(video.shape[2])))
+    video = torch.cat(videos, dim=2)
+    audio = torch.cat(audios, dim=-1)[..., :audio_t_for_frames(frames)]
+    return {"samples": comfy.nested_tensor.NestedTensor((video, audio))}
+
+
 class H3LongTakeStitch:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2424,8 +2449,11 @@ class H3LongTakeStitch:
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("path", "report")
+    RETURN_TYPES = ("STRING", "STRING", "LATENT")
+    RETURN_NAMES = ("path", "report", "latent")
+    OUTPUT_TOOLTIPS = ("Stitched video.", "Report.",
+                       "AV latent of the whole project (without the repeated context tokens): for H3 latent upscalers "
+                       "or to decode the whole video in one go. Empty if a clip's latent is missing.")
     FUNCTION = "stitch"
     CATEGORY = "H3 LongTake"
     OUTPUT_NODE = True
@@ -2450,7 +2478,7 @@ class H3LongTakeStitch:
             # project_dir linked but empty: the Render is in dry run. Do not re-assemble project_name's old video.
             report = "nothing to stitch: the linked Render is in dry run."
             print("[H3 LongTake] " + report)
-            return {"ui": {"text": [report]}, "result": ("", report)}
+            return {"ui": {"text": [report]}, "result": ("", report, None)}
         if isinstance(project_dir, str):
             project_dir = project_dir.strip()
             if not os.path.isdir(project_dir):
@@ -2465,7 +2493,7 @@ class H3LongTakeStitch:
                 report = (f"nothing to stitch: no {PLAN_FILE} in {project_dir}. Run the Render with dry_run=false "
                           "first (or set expected_clips).")
                 print("[H3 LongTake] " + report)
-                return {"ui": {"text": [report]}, "result": ("", report)}
+                return {"ui": {"text": [report]}, "result": ("", report, None)}
             expected_clips = len(plan["plan"]["clips"])
 
         files = []
@@ -2528,11 +2556,14 @@ class H3LongTakeStitch:
             lines.append("workflow embedded in the mp4 (drop it onto ComfyUI to reopen the project)")
         if audio_note:
             lines.append(audio_note)
+        latent = _project_latent(project_dir, expected_clips)
+        if latent is None:
+            lines.append("latent output empty: at least one clip latent is missing")
         report = "\n".join(lines)
         print("[H3 LongTake Stitch] " + report)
         ui = _ui_video(out_path)
         ui["text"] = [report]
-        return {"ui": ui, "result": (out_path, report)}
+        return {"ui": ui, "result": (out_path, report, latent)}
 
 
 NODE_CLASS_MAPPINGS = {

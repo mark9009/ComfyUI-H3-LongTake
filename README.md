@@ -16,8 +16,8 @@ Every clip is written to disk as soon as it is done: you can stop, resume, redo 
 final video with the original audio. The full workflow is stored inside the project folder and inside the
 final mp4, so any output can be dropped back onto ComfyUI to reopen the graph.
 
-Depends on **ComfyUI core ≥ 0.34** only (no other node packs required; the Refine can use an optional latent
-upscaler pack, see *Models*). Tested on a 16 GB GPU (RTX 4080-class) with
+Depends on **ComfyUI core ≥ 0.34** only (no other node packs required; the Refine and the latent upscale
+workflow can use an optional latent upscaler pack, see *Models*). Tested on a 16 GB GPU (RTX 4080-class) with
 25 GB of Qwen text-encoder weights staged in system RAM.
 
 ## Examples
@@ -78,6 +78,12 @@ the PATH. No other Python dependency.
   tool, not part of this pack. Delete that node and write the prompt blocks yourself (or with the instruction in
   `docs/PROMPTING.md`); everything else in those workflows (FaceRefine, `object_image`, H3 Video File, H3 LoRA Tags)
   is in this pack from 1.3.4.
+- **Image to Video: a one-frame jump at every join between clips** (most visible with a static camera and slow
+  motion): set `anchor_mode = inpaint` on the Image to Video node (the default from 1.3.5; workflows saved before keep
+  `keyframe`). With `keyframe` the previous clip's last frames reach the model as a guide and it redraws them, so the
+  new clip does not start exactly where the old one ended. With `inpaint` they are copied into the latent and protected
+  by the mask. Measured on a real 15 s case (3 clips, same seed): jump at the joins 5.4x and 6.8x the normal
+  frame-to-frame change with `keyframe`, 1.5x and 1.7x with `inpaint`; `context_frames = 22` makes it worse (up to 19x).
 - **An older workflow shows odd values in `source_face` or the Refine's `detail`**: ComfyUI stores widget values by
   position, so workflows saved before those inputs existed carry a neighbouring value there. From 1.3.4 the nodes
   accept it (`keep` / 0, noted in the report); re-save the workflow to clean it up.
@@ -92,7 +98,7 @@ the PATH. No other Python dependency.
 | audio VAE | `minimax_h3_audio_vae_fp32.safetensors` (`models/vae`) | |
 | Turbo LoRA | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` (`models/loras`) | 4 steps, the node samples positive-only (CFG 1) |
 | Turbo LoRA, 8 steps (optional) | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` (`models/loras`) | lightx2v v1.0, strength 1.0, `steps = 8`: steadier video and better faces in profiles, 2× the sampling time — recommended for the Refine (see *Face fidelity*) |
-| H3 latent upscaler (optional, Refine) | `minimax_h3_latent_upscaler_3d_fp16.safetensors` (`models/latent_upscale_models`) + the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) node pack | used by the Refine's `upscale = latent_model` (default): faster and much more detail; without it the Refine falls back to the pixel upscale and says so in its report |
+| H3 latent upscaler (optional, Refine and `upscale_latent` workflow) | `minimax_h3_latent_upscaler_3d_fp16.safetensors` (`models/latent_upscale_models`) + the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) node pack | used by the Refine's `upscale = latent_model` (default): faster and much more detail; without it the Refine falls back to the pixel upscale and says so in its report. The `upscale_latent` workflow also uses its *MMH3 Split Upscale* node and [VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) to save the mp4 |
 | StyleTransfer LoRA (optional) | `minimax_h3_style_transfer_v1.0_r64.safetensors` (`models/loras`) | [NRDX on Civitai](https://civitai.com/models/2932297) — needed only for `source_role = guide` |
 | Character Swap LoRA (optional) | `h3_character_swap_pro4500_1000.safetensors` (`models/loras`) | [akatz-ai on Hugging Face](https://huggingface.co/akatz-ai/MiniMax-H3-Character-Swap-LoRA), strength 1.0 — for character swap, see *Character swap with the Character Swap LoRA* |
 | insightface (optional) | `buffalo_l` in `models/insightface` + `pip install insightface onnxruntime` | only for the Render's `source_face` (downloaded on first use) |
@@ -109,6 +115,8 @@ The example workflows reference these file names; pick your own text-encoder fil
    `workflow/H3_LongTake_i2v.json` (a long video from a single image, one prompt block per clip, with the second pass).
    From 1.3.4 also `workflow/H3_LongTake_character_swap_v2.json` (character swap with the Character Swap LoRA and
    `source_face`) and `workflow/H3_LongTake_i2v_facerefine.json` (Image to Video + FaceRefine on the small faces).
+   From 1.3.5 `workflow/H3_LongTake_upscale_latent.json`: latent upscale of a project you already rendered (see
+   *H3 LongTake Stitch*).
 2. Put your source video in `ComfyUI/input/` and select it in `source_file`; connect your picture(s) to
    `ref_image_1..3`.
 3. Set `dry_run = true` and queue: the node prints the slicing plan (how many clips, how long).
@@ -237,6 +245,20 @@ Existing files are never overwritten (`_001`, `_002`… suffixes). With `project
 `dry_run`, the Stitch (like the Refine) stops with a message instead of re-assembling the old project under
 `project_name`; while `project_dir` is linked, `project_name` is greyed out.
 
+**`latent` output (1.3.5)**: the AV latent of the whole project, the clip latents one after the other without the
+repeated context frames (5 context frames = 2 latent tokens, so the clips fit without shifting the token cycle; the
+audio is cut to the video's length). It is empty if a clip's latent is missing. Use it to feed any MiniMax H3 latent
+node, for example a latent upscaler, or to decode the whole video in one go. With `anchor_mode = inpaint` the
+context tokens of each clip are identical to the previous clip's tail (measured difference 0.0), so the joined latent
+is continuous.
+
+`workflow/H3_LongTake_upscale_latent.json` works on a project you **already rendered** (no clip is rendered again):
+Stitch `latent` → the MiniMax H3 latent upscaler 3D of
+[LBH-123-AI](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) (to 1 MP) → a light second pass in
+overlapping time chunks (*MMH3 Split Upscale*, same pack, 0.2 denoise, 2 steps) → VAE Decode (Tiled) of the whole
+video + audio. Measured on 10 s at 480x704: 832x1248 in 532 s on 16 GB, much finer hair, knit and skin, same face;
+decode only (no upscale) 34 s. Use the model and LoRAs you rendered with.
+
 ### H3 LongTake Image to Video
 
 A long video **from a single image** (fl2va), with the Render's machinery: one clip in memory, chunks on disk,
@@ -257,7 +279,8 @@ the preview and the Stitch concatenate it.
 | `aspect` / `megapixels` | canvas: `source` = `start_image`'s aspect |
 | `object_image` | experimental, not measured: an object to keep the same in every clip (e.g. a mug with its logo) as the last `<Picture N>`, with a sentence that names it; a sharp logo on a flat background (ref2va) |
 | `reference_strength`, `master_shot_context`, `detail`, `seam_fade` | measured, **no gain** over run-to-run noise: kept at their neutral defaults (1.0 / off / 0 / off) so workflows that set them still load. `reference_strength` mixes the references towards noise; `master_shot_context` passes clip 0 as `<Video 1>` (doubles the time per step); `detail` is the Detail Daemon timestep shift (4-8 turbo steps touch too few sigmas); `seam_fade` is a 12 ms audio ramp at the joins (with `audio_context` there is no click to remove) |
-| the rest | as the Render (`context_frames`, `anchor_mode`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
+| `anchor_mode` | `inpaint` (default from 1.3.5): the previous clip's tail is copied into the latent and protected by the mask, the model does not redraw it — clean joins (see *Troubleshooting*: 5.4-6.8x → 1.5-1.7x). `keyframe`: the tail as a guide, redrawn by the model. `none`: independent clips |
+| the rest | as the Render (`context_frames`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
 
 Workflow: `workflow/H3_LongTake_i2v.json` (Refine and Stitch muted, Ctrl+M to enable them). Every shipped workflow
 carries a README note inside the graph with the setup, the steps and the measured defaults.
