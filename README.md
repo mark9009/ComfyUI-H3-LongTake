@@ -117,6 +117,8 @@ The example workflows reference these file names; pick your own text-encoder fil
    `source_face`) and `workflow/H3_LongTake_i2v_facerefine.json` (Image to Video + FaceRefine on the small faces).
    From 1.3.5 `workflow/H3_LongTake_upscale_latent.json`: latent upscale of a project you already rendered (see
    *H3 LongTake Stitch*).
+   `workflow/H3_LongTake_i2v_upscale_latent.json` does it all in one queue (Image to Video → Stitch → latent upscale),
+   with the models wired without lines by *Anything Everywhere* ([cg-use-everywhere](https://github.com/chrisgoringe/cg-use-everywhere)).
 2. Put your source video in `ComfyUI/input/` and select it in `source_file`; connect your picture(s) to
    `ref_image_1..3`.
 3. Set `dry_run = true` and queue: the node prints the slicing plan (how many clips, how long).
