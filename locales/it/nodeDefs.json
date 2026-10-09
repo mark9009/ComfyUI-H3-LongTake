@@ -1,0 +1,580 @@
+{
+  "H3LongTakeRender": {
+    "display_name": "H3 LongTake Render",
+    "description": "Genera un video lungo con MiniMax H3 Ref2VA clip per clip: ogni clip vede la propria fetta del sorgente come <Video 1> e la coda della clip precedente come ancora. I chunk finiscono in output/h3_longtake/<project_name>/; monta con H3 LongTake Stitch.",
+    "inputs": {
+      "model": {
+        "name": "model"
+      },
+      "vae": {
+        "name": "vae"
+      },
+      "audio_vae": {
+        "name": "audio_vae"
+      },
+      "source_file": {
+        "name": "source_file",
+        "tooltip": "Video sorgente in input/: ffmpeg decodifica solo la fetta di ogni clip (RAM minima). Con '(use source_video)' si usa il batch IMAGE collegato."
+      },
+      "prompt": {
+        "name": "prompt",
+        "tooltip": "Cambiando source_role il campo si riempie col template del ruolo (solo se vuoto o ancora uguale a un template). Vuoto = template del ruolo."
+      },
+      "project_name": {
+        "name": "project_name"
+      },
+      "width": {
+        "name": "width",
+        "tooltip": "Usato solo con aspect=manual."
+      },
+      "height": {
+        "name": "height",
+        "tooltip": "Usato solo con aspect=manual."
+      },
+      "clip_frames": {
+        "name": "clip_frames",
+        "tooltip": "Frame generati per clip (17k+5). 124 = 5.2s, 243 = 10.1s."
+      },
+      "context_frames": {
+        "name": "context_frames",
+        "tooltip": "Frame di coda della clip precedente usati come ancora e sovrapposizione. 5: giunzione pulita e massima aderenza a <Video 1> (misurato). 22: ancora piu' lunga, ruba attenzione al riferimento."
+      },
+      "seed": {
+        "name": "seed"
+      },
+      "steps": {
+        "name": "steps"
+      },
+      "sampler_name": {
+        "name": "sampler_name"
+      },
+      "scheduler": {
+        "name": "scheduler"
+      },
+      "mode": {
+        "name": "mode",
+        "tooltip": "continue: salta le clip gia' su disco. restart: cancella tutto. redo_from: rifa' da redo_from_clip in poi. redo_one: rifa' SOLO redo_from_clip, ancorando testa e coda alle clip vicine (cambia il seed)."
+      },
+      "redo_from_clip": {
+        "name": "redo_from_clip"
+      },
+      "max_clips": {
+        "name": "max_clips",
+        "tooltip": "0 = tutte. Utile per provare solo le prime N clip."
+      },
+      "dry_run": {
+        "name": "dry_run",
+        "tooltip": "Mostra solo il piano di taglio, non genera."
+      },
+      "clip": {
+        "name": "clip",
+        "tooltip": "Qwen del modello base: codifica prompt e riferimenti. Non serve con text_cond (Viggle-Animate)."
+      },
+      "ref_image_1": {
+        "name": "ref_image_1"
+      },
+      "ref_image_2": {
+        "name": "ref_image_2"
+      },
+      "ref_image_3": {
+        "name": "ref_image_3"
+      },
+      "ref_mask_1": {
+        "name": "ref_mask_1",
+        "tooltip": "Maschera del soggetto di ref_image_1 (1 = soggetto, es. uscita di un nodo rembg): la foto viene messa su un fondo piatto del colore medio del sorgente, cosi' la sua scenografia non finisce nel video. Con Viggle e' l'unico modo (niente prompt)."
+      },
+      "source_video": {
+        "name": "source_video",
+        "tooltip": "Alternativa a source_file per prove brevi: batch IMAGE (float32, ~6 MB/frame a 0.5 MP)."
+      },
+      "source_fps": {
+        "name": "source_fps",
+        "tooltip": "FPS reale di source_video (ignorato con source_file)."
+      },
+      "source_audio": {
+        "name": "source_audio",
+        "tooltip": "Audio di source_video (ignorato con source_file)."
+      },
+      "use_source_audio": {
+        "name": "use_source_audio",
+        "tooltip": "Passa l'audio del sorgente come soundtrack di <Video 1> (lip-sync); costa token."
+      },
+      "ref_image_size": {
+        "name": "ref_image_size"
+      },
+      "ref_video_size": {
+        "name": "ref_video_size",
+        "tooltip": "match: il video di riferimento viene scalato all'area di uscita (meno token). native: canvas 768 del nodo core."
+      },
+      "audio_context": {
+        "name": "audio_context",
+        "tooltip": "Porta anche la coda audio della clip precedente."
+      },
+      "chunk_crf": {
+        "name": "chunk_crf"
+      },
+      "aspect": {
+        "name": "aspect",
+        "tooltip": "Proporzione della tela di uscita. source = quella del video sorgente (consigliato: con una tela di proporzione diversa H3 tende a copiare <Video 1> ignorando <Picture 1>)."
+      },
+      "megapixels": {
+        "name": "megapixels",
+        "tooltip": "Area della tela di uscita (ignorato con aspect=manual). 0.5 MP ~ 544x960 in 9:16."
+      },
+      "prompt_text": {
+        "name": "prompt_text",
+        "tooltip": "Prompt da un nodo di testo esterno: se collegato e non vuoto sostituisce il campo prompt."
+      },
+      "start_seconds": {
+        "name": "start_seconds",
+        "tooltip": "Inizio del tratto di sorgente da usare."
+      },
+      "end_seconds": {
+        "name": "end_seconds",
+        "tooltip": "Fine del tratto di sorgente (0 = fino alla fine). Utile per tagliare code tipo la schermata TikTok."
+      },
+      "anchor_mode": {
+        "name": "anchor_mode",
+        "tooltip": "Come si aggancia la clip precedente. keyframe: coda latente come guida H3 sui frame 0..C-1, poi tagliati (stile Motion Context). inpaint: coda copiata dentro il latente e protetta con la maschera (native masked AV preservation; ok con contesto 5, stacco con 22). none: nessuna ancora, clip indipendenti (diagnostica: tetto di aderenza al riferimento)."
+      },
+      "source_role": {
+        "name": "source_role",
+        "tooltip": "reference: la fetta e' <Video 1> (Ref2VA, suggerimento di movimento). guide: la fetta e' un guide latent ancorato al frame 0 per tutta la clip (movimento e inquadratura frame per frame; per il LoRA StyleTransfer, con <Picture 1> = stile). guide_retexture: come guide, template 'retexture:' solo testo. guide+reference: entrambi."
+      },
+      "seam_match": {
+        "name": "seam_match",
+        "tooltip": "Alla giunzione con la clip precedente corregge i primi 24 frame verso i frame di contesto (coda della clip precedente): color = luminanza + tinta (misurato: dE 5.6 -> 1.6), luminance = solo esposizione. Solo pixel, dopo il decode; non tocca il latente."
+      },
+      "text_cond": {
+        "name": "text_cond",
+        "tooltip": "Embedding congelato di Viggle-Animate (nodo 'Load Text Conditioning (Viggle)'). Se collegato: modello = finetune Viggle (character replacement), niente Qwen, prompt ignorato, riferimenti video->immagine come nel finetune, solo ref_image_1; source_role deve essere reference. Consigliato: steps 3, scheduler simple, ModelSamplingMiniMaxH3 shift 3/3 a monte (= sigma upstream 1, .857, .6, 0)."
+      },
+      "source_face": {
+        "name": "source_face",
+        "tooltip": "Cambio personaggio: cosa fare del volto della persona nella fetta di <Video 1>. blur_keep_mouth: sfocato tranne la bocca, l'identita' viene solo da <Picture 1> e il labiale resta (misurato: somiglianza al personaggio 0,41 -> 0,52, labiale 0,63 -> 0,55). blur: sfoca tutto, identita' uguale ma la bocca resta ferma (per balli e gesti). Serve insightface; ~1 s ogni 3 frame su CPU. Il risultato si vede in clip_NNN_ref.mp4."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "last_clip"
+      },
+      "1": {
+        "name": "project_dir"
+      },
+      "2": {
+        "name": "report"
+      }
+    }
+  },
+  "H3LongTakeImageRender": {
+    "display_name": "H3 LongTake Immagine -> Video",
+    "description": "Video lungo da un'immagine con MiniMax H3 (fl2va) clip per clip, un blocco di prompt per clip (separati da '---'). Una clip sola in memoria, chunk su disco con l'audio generato; monta con H3 LongTake Stitch.",
+    "inputs": {
+      "model": {
+        "name": "model",
+        "tooltip": "Modello H3 fl2va (immagine -> video) con le LoRA gia' applicate. Con identity_reference serve il ref2va (accetta comunque i keyframe)."
+      },
+      "clip": {
+        "name": "clip"
+      },
+      "vae": {
+        "name": "vae"
+      },
+      "audio_vae": {
+        "name": "audio_vae",
+        "tooltip": "VAE audio H3: l'audio generato viene decodificato per clip e messo nei chunk."
+      },
+      "start_image": {
+        "name": "start_image",
+        "tooltip": "Primo frame del video (keyframe al frame 0 della clip 0)."
+      },
+      "prompts": {
+        "name": "prompts",
+        "tooltip": "Un blocco per clip (5.2 s con clip_frames=124), separati da una riga '---'. L'ultimo blocco si ripete per le clip rimanenti. Puo' descrivere cosa succede in ogni tratto: il modello vede solo il blocco della sua clip."
+      },
+      "project_name": {
+        "name": "project_name"
+      },
+      "duration_seconds": {
+        "name": "duration_seconds",
+        "tooltip": "Durata del video finale; il piano la copre con clip da clip_frames."
+      },
+      "width": {
+        "name": "width",
+        "tooltip": "Usato solo con aspect=manual."
+      },
+      "height": {
+        "name": "height",
+        "tooltip": "Usato solo con aspect=manual."
+      },
+      "clip_frames": {
+        "name": "clip_frames",
+        "tooltip": "Frame generati per clip (17k+5). 124 = 5.2s per blocco di prompt."
+      },
+      "context_frames": {
+        "name": "context_frames",
+        "tooltip": "Coda della clip precedente usata come ancora (5 = giunzione pulita, misurato)."
+      },
+      "seed": {
+        "name": "seed"
+      },
+      "steps": {
+        "name": "steps"
+      },
+      "sampler_name": {
+        "name": "sampler_name"
+      },
+      "scheduler": {
+        "name": "scheduler"
+      },
+      "mode": {
+        "name": "mode",
+        "tooltip": "continue: salta le clip gia' su disco. restart: cancella tutto. redo_from: rifa' da redo_from_clip in poi. redo_one: rifa' SOLO redo_from_clip ancorando testa e coda alle clip vicine."
+      },
+      "redo_from_clip": {
+        "name": "redo_from_clip"
+      },
+      "max_clips": {
+        "name": "max_clips",
+        "tooltip": "0 = tutte."
+      },
+      "dry_run": {
+        "name": "dry_run",
+        "tooltip": "Mostra solo il piano e i blocchi di prompt, non genera."
+      },
+      "end_image": {
+        "name": "end_image",
+        "tooltip": "Ultimo frame del video (keyframe sull'ultimo frame dell'ultima clip, come fl2va)."
+      },
+      "identity_reference": {
+        "name": "identity_reference",
+        "tooltip": "start_image anche come <Picture 1> (Ref2VA) in tutte le clip: ancora d'identita' contro la deriva nelle catene lunghe. Richiede il modello ref2va."
+      },
+      "face_image": {
+        "name": "face_image",
+        "tooltip": "Primo piano del volto come riferimento in tutte le clip (<Picture 2>, o <Picture 1> senza identity_reference): l'ancora piu' forte per la faccia. Richiede il modello ref2va."
+      },
+      "character_sheet": {
+        "name": "character_sheet",
+        "tooltip": "Foglio del personaggio (piu' viste in una sola immagine) come ultimo riferimento in tutte le clip: al modello viene detto che sono angolazioni diverse della stessa persona, non persone diverse. Due o tre viste, fondo piatto, niente scritte: la composizione del riferimento tende a trasudare nel video. Richiede il ref2va."
+      },
+      "prompt_text": {
+        "name": "prompt_text",
+        "tooltip": "Prompt da un nodo di testo esterno (stessi blocchi '---'): se collegato sostituisce il campo prompts."
+      },
+      "aspect": {
+        "name": "aspect",
+        "tooltip": "Proporzione della tela: source = quella di start_image. width/height contano solo con manual."
+      },
+      "megapixels": {
+        "name": "megapixels"
+      },
+      "anchor_mode": {
+        "name": "anchor_mode",
+        "tooltip": "keyframe: coda latente della clip precedente come guida sui frame 0..C-1. inpaint: coda copiata nel latente e protetta con la maschera. none: clip indipendenti."
+      },
+      "audio_context": {
+        "name": "audio_context",
+        "tooltip": "Porta anche la coda audio della clip precedente."
+      },
+      "seam_match": {
+        "name": "seam_match",
+        "tooltip": "Correzione di esposizione/tinta dei primi 24 frame verso la clip precedente (solo pixel)."
+      },
+      "chunk_crf": {
+        "name": "chunk_crf"
+      },
+      "reference_strength": {
+        "name": "reference_strength",
+        "tooltip": "Quanto il modello e' obbligato a riprodurre i riferimenti (identity_reference, face_image, character_sheet). 1.0 = come prima. Sotto, l'identita' tiene meno ma il take si muove di piu': serve quando i riferimenti irrigidiscono la scena. Non tocca i keyframe."
+      },
+      "master_shot_context": {
+        "name": "master_shot_context",
+        "tooltip": "Dalla clip 1 in poi passa la clip 0 come <Video 1>: memoria dell'ambiente. Alla giunzione arrivano solo context_frames fotogrammi, e se sono un primo piano senza volto il modello non sa piu' dove si trova; il campo largo iniziale glielo ricorda. Costa: un riferimento video raddoppia il tempo per passo. Richiede il ref2va."
+      },
+      "detail": {
+        "name": "detail",
+        "tooltip": "Dettaglio fine (tecnica del Detail Daemon). MISURATO sui nostri tempi: a 0.2 e anche a 1.0 nessun guadagno di nitidezza sopra il rumore fra una run e l'altra, perche' con 4-8 passi turbo il campionatore tocca troppi pochi sigma perche' uno spostamento del 2-10% del timestep conti. Lasciato a 0. Servirebbe una schedule da 20-30 passi."
+      },
+      "seam_fade": {
+        "name": "seam_fade",
+        "tooltip": "Sfuma l'audio di 12 ms ai bordi dei chunk. MISURATO: nelle nostre giunzioni il clic non c'e' (con audio_context la traccia e' gia' continua), quindi serve solo a chi incolla clip renderizzate a parte."
+      },
+      "object_image": {
+        "name": "object_image",
+        "tooltip": "Un oggetto da tenere uguale in tutte le clip (es. il boccale con il suo logo), come ultimo riferimento <Picture N>: il logo nitido su fondo piatto aiuta H3 a non reinventarlo nei primi piani. Richiede il ref2va."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "last_clip"
+      },
+      "1": {
+        "name": "project_dir"
+      },
+      "2": {
+        "name": "report"
+      }
+    }
+  },
+  "H3LongTakeRefine": {
+    "display_name": "H3 LongTake Rifinitura (secondo passo)",
+    "description": "Secondo passo a risoluzione maggiore clip per clip (upscale + denoise parziale) di un progetto H3 LongTake: scrive <progetto>/hr con l'audio dei chunk originali; monta con H3 LongTake Stitch.",
+    "inputs": {
+      "model": {
+        "name": "model",
+        "tooltip": "Modello H3 con Turbo (ref2va o fl2va: qui non ci sono riferimenti video)."
+      },
+      "clip": {
+        "name": "clip"
+      },
+      "vae": {
+        "name": "vae"
+      },
+      "project_name": {
+        "name": "project_name",
+        "tooltip": "Progetto gia' renderizzato (Render o Immagine -> Video). La rifinitura finisce in <progetto>/hr (nello Stitch: project_name = 'nome/hr')."
+      },
+      "megapixels": {
+        "name": "megapixels",
+        "tooltip": "Tela del secondo passo (stessa proporzione del progetto). 1.0 MP ~ 736x1312 in 9:16."
+      },
+      "denoise": {
+        "name": "denoise",
+        "tooltip": "Quanto rigenerare: 0.3-0.5 aggiunge dettaglio tenendo contenuto e movimento; oltre cambia la scena."
+      },
+      "steps": {
+        "name": "steps",
+        "tooltip": "Passi del secondo passo (come il KSampler con denoise: schedula su steps/denoise, si usa la coda)."
+      },
+      "seed": {
+        "name": "seed"
+      },
+      "sampler_name": {
+        "name": "sampler_name"
+      },
+      "scheduler": {
+        "name": "scheduler"
+      },
+      "prompt": {
+        "name": "prompt",
+        "tooltip": "Vuoto: nei progetti Immagine -> Video usa i blocchi del progetto (uno per clip), altrimenti un prompt generico di qualita'. Con denoise basso conta poco."
+      },
+      "mode": {
+        "name": "mode",
+        "tooltip": "continue: salta le clip gia' rifinite."
+      },
+      "max_clips": {
+        "name": "max_clips",
+        "tooltip": "0 = tutte."
+      },
+      "dry_run": {
+        "name": "dry_run"
+      },
+      "ref_image_1": {
+        "name": "ref_image_1",
+        "tooltip": "Riferimento d'identita' (<Picture 1>) per il secondo passo: solo con il ref2va."
+      },
+      "face_image": {
+        "name": "face_image",
+        "tooltip": "Primo piano del volto (<Picture 2>, o <Picture 1> da solo) per il secondo passo: rimette la faccia della foto anche dove il primo passo l'ha persa. Solo con il ref2va."
+      },
+      "character_sheet": {
+        "name": "character_sheet",
+        "tooltip": "Foglio del personaggio (piu' viste in una sola immagine) come ultimo riferimento: lo stesso che hai dato al Render, cosi' il secondo passo non cambia idea. Solo con il ref2va."
+      },
+      "chunk_crf": {
+        "name": "chunk_crf"
+      },
+      "project_dir": {
+        "name": "project_dir",
+        "tooltip": "Collega project_dir del Render/I2V: sostituisce project_name."
+      },
+      "frames_from": {
+        "name": "frames_from",
+        "tooltip": "mp4: i frame nuovi della clip vengono letti dal chunk clip_XXX.mp4 invece che dal latente (per rifinire chunk gia' post-prodotti in pixel, es. FaceRefine); il contesto resta dal latente."
+      },
+      "detail": {
+        "name": "detail",
+        "tooltip": "Dettaglio fine (tecnica del Detail Daemon). MISURATO sui nostri tempi: a 0.2 e anche a 1.0 nessun guadagno di nitidezza sopra il rumore fra una run e l'altra, perche' con 4-8 passi turbo il campionatore tocca troppi pochi sigma perche' uno spostamento del 2-10% del timestep conti. Lasciato a 0. Servirebbe una schedule da 20-30 passi."
+      },
+      "upscale": {
+        "name": "upscale",
+        "tooltip": "latent_model: ingrandisce il latente con l'upscaler H3 (Comfyui_Minimax_h3_latent_Upscaler + minimax_h3_latent_upscaler_3d in models/latent_upscale_models), senza passare dal VAE: piu' veloce e molto piu' dettaglio. Se manca, o con frames_from = mp4, o con una tela piu' piccola della sorgente, usa pixel. pixel: decodifica, lanczos, ricodifica (il metodo di prima)."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "last_clip"
+      },
+      "1": {
+        "name": "project_dir"
+      },
+      "2": {
+        "name": "report"
+      }
+    }
+  },
+  "H3LongTakeStitch": {
+    "display_name": "H3 LongTake Stitch",
+    "description": "Concatena i chunk di un progetto H3 LongTake (senza ricodifica) e rimonta l'audio originale.",
+    "inputs": {
+      "project_name": {
+        "name": "project_name"
+      },
+      "output_name": {
+        "name": "output_name"
+      },
+      "audio_file": {
+        "name": "audio_file",
+        "tooltip": "auto: audio del sorgente usato dal Render (salvato nel progetto). Oppure scegli/carica un video da cui prendere l'audio."
+      },
+      "source_audio": {
+        "name": "source_audio",
+        "tooltip": "In alternativa: audio originale come AUDIO (ha priorita' su auto)."
+      },
+      "expected_clips": {
+        "name": "expected_clips",
+        "tooltip": "0 = usa il piano salvato nel progetto."
+      },
+      "project_dir": {
+        "name": "project_dir",
+        "tooltip": "Collega l'uscita project_dir del Render: sostituisce project_name e fa girare lo Stitch dopo il Render."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "path",
+        "tooltip": "Video montato."
+      },
+      "1": {
+        "name": "report",
+        "tooltip": "Resoconto."
+      },
+      "2": {
+        "name": "latent",
+        "tooltip": "Latente AV di tutto il progetto (senza i token di contesto ripetuti): per gli upscaler latenti H3 o per decodificare il video intero in una volta. Vuoto se manca il latente di una clip."
+      }
+    }
+  },
+  "H3LongTakeFaceRefine": {
+    "display_name": "H3 LongTake FaceRefine (volti piccoli)",
+    "description": "Rigenera i volti piccoli clip per clip con ComfyUI-H3-FaceRefine e scrive <progetto>/fr; monta con H3 LongTake Stitch. Salta le clip col volto gia' grande.",
+    "inputs": {
+      "model": {
+        "name": "model",
+        "tooltip": "H3 ref2va con la Turbo (8-step v1.0 consigliata): serve il ref2va perche' il volto entra come <Picture 1>, anche se il progetto e' stato fatto col fl2va."
+      },
+      "clip": {
+        "name": "clip"
+      },
+      "vae": {
+        "name": "vae"
+      },
+      "face_image": {
+        "name": "face_image",
+        "tooltip": "Primo piano del volto, non la foto intera."
+      },
+      "project_name": {
+        "name": "project_name",
+        "tooltip": "Progetto gia' renderizzato. Il risultato finisce in <progetto>/fr (nello Stitch: project_name = 'nome/fr')."
+      },
+      "description": {
+        "name": "description",
+        "tooltip": "Aspetto del soggetto (capelli, abito): aiuta a non cambiare persona."
+      },
+      "denoise": {
+        "name": "denoise",
+        "tooltip": "0.25-0.35. Con lo shift 12 di H3 gia' 0.25 riscrive il volto; oltre, la testa deriva rispetto al corpo."
+      },
+      "steps": {
+        "name": "steps"
+      },
+      "seed": {
+        "name": "seed"
+      },
+      "max_face_px": {
+        "name": "max_face_px",
+        "tooltip": "Clip col volto mediano oltre questa altezza (px) copiate senza FaceRefine. 0 = rifinisci tutte."
+      },
+      "mode": {
+        "name": "mode",
+        "tooltip": "continue: salta le clip gia' fatte."
+      },
+      "project_dir": {
+        "name": "project_dir",
+        "tooltip": "Collega project_dir del Render/I2V/Rifinitura."
+      },
+      "large_face_multiplier": {
+        "name": "large_face_multiplier",
+        "tooltip": "Frazione del denoise sui volti grandi (default dell'autore)."
+      },
+      "smooth_window": {
+        "name": "smooth_window",
+        "tooltip": "Lisciamento del riquadro: piu' basso se la camera si muove."
+      },
+      "crop_factor": {
+        "name": "crop_factor"
+      },
+      "feather": {
+        "name": "feather"
+      },
+      "chunk_crf": {
+        "name": "chunk_crf"
+      },
+      "seam_blend_frames": {
+        "name": "seam_blend_frames",
+        "tooltip": "Alle giunzioni interne la clip rifinita sfuma verso l'originale su questi frame, cosi' il volto non scatta passando da una clip copiata (o rifinita a parte) a una rifinita. 0 = spento."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "last_clip"
+      },
+      "1": {
+        "name": "project_dir"
+      },
+      "2": {
+        "name": "report"
+      }
+    }
+  },
+  "H3VideoFile": {
+    "display_name": "H3 Video File (path -> VHS filenames)",
+    "description": "Percorso di un video salvato -> VHS_FILENAMES (per Image Saver Video Metadata), larghezza e altezza.",
+    "inputs": {
+      "path": {
+        "name": "path"
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "filenames"
+      },
+      "1": {
+        "name": "width"
+      },
+      "2": {
+        "name": "height"
+      }
+    }
+  },
+  "H3LoraTags": {
+    "display_name": "H3 LoRA Tags (dal grafo, per Image Saver)",
+    "description": "LoRA applicate al MODEL collegato come tag <lora:nome:forza> e nome del modello base (per Image Saver Metadata).",
+    "inputs": {
+      "model": {
+        "name": "model",
+        "tooltip": "Il MODEL che va al Render (dopo le LoRA). Non viene caricato: serve solo a trovare la catena nel grafo."
+      }
+    },
+    "outputs": {
+      "0": {
+        "name": "lora_tags"
+      },
+      "1": {
+        "name": "model_name"
+      }
+    }
+  }
+}

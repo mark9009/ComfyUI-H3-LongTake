@@ -66,6 +66,10 @@ that, a second run in the same session could slow down until it hung. `ffmpeg` m
 otherwise the `imageio-ffmpeg` binary (`pip install imageio-ffmpeg` into ComfyUI's Python), otherwise `ffmpeg` on
 the PATH. No other Python dependency.
 
+**Italian interface**: with ComfyUI set to Italian (Settings → Comfy → Locale) node names, descriptions and tooltips
+appear in Italian (`locales/it/nodeDefs.json`). Menu values (`inpaint`, `(auto from project)`…) stay in English
+because they are saved in the workflows; the Italian entries of older workflows are still accepted.
+
 ### Troubleshooting
 
 - **The Manager asks to install "Fearnworks Nodes" for the H3 LongTake nodes**: workflows saved before 1.3.3 carried
