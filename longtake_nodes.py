@@ -1422,7 +1422,7 @@ class H3LongTakeRender:
             i = c["index"]
             latent_path, mp4_path = _clip_paths(project_dir, i)
             if os.path.isfile(latent_path) and os.path.isfile(mp4_path):
-                saved = torch.load(latent_path, map_location="cpu")
+                saved = torch.load(latent_path, map_location="cpu", weights_only=True)
                 prev_video, prev_audio = saved["video"], saved["audio"]
                 prev_tail, prev_tail_src = None, (mp4_path, int(saved.get("new", c["new"])))
                 skipped.append(i)
@@ -1515,7 +1515,7 @@ class H3LongTakeRender:
             if mode == "redo_one":
                 next_latent_path, _ = _clip_paths(project_dir, i + 1)
                 if os.path.isfile(next_latent_path):
-                    nxt = torch.load(next_latent_path, map_location="cpu")
+                    nxt = torch.load(next_latent_path, map_location="cpu", weights_only=True)
                     print(f"[H3 LongTake] clip_{i:03d}: tail anchored to the head of clip_{i + 1:03d}")
 
             noise_mask = None
@@ -1927,7 +1927,7 @@ class H3LongTakeImageRender:
             i = c["index"]
             latent_path, mp4_path = _clip_paths(project_dir, i)
             if os.path.isfile(latent_path) and os.path.isfile(mp4_path):
-                saved = torch.load(latent_path, map_location="cpu")
+                saved = torch.load(latent_path, map_location="cpu", weights_only=True)
                 prev_video, prev_audio = saved["video"], saved["audio"]
                 prev_tail, prev_tail_src = None, (mp4_path, int(saved.get("new", c["new"])))
                 skipped.append(i)
@@ -1998,7 +1998,7 @@ class H3LongTakeImageRender:
             if mode == "redo_one":
                 next_latent_path, _ = _clip_paths(project_dir, i + 1)
                 if os.path.isfile(next_latent_path):
-                    nxt = torch.load(next_latent_path, map_location="cpu")
+                    nxt = torch.load(next_latent_path, map_location="cpu", weights_only=True)
                     print(f"[H3 LongTake I2V] clip_{i:03d}: tail anchored to the head of clip_{i + 1:03d}")
 
             noise_mask = None
@@ -2320,7 +2320,7 @@ class H3LongTakeRefine:
                 skipped.append(i)
                 pbar.update(1)
                 continue
-            saved = torch.load(src_latent, map_location="cpu")
+            saved = torch.load(src_latent, map_location="cpu", weights_only=True)
             video_lat, audio_lat = saved["video"], saved["audio"]
             ctx, new = int(saved.get("ctx", c["ctx"])), int(saved.get("new", c["new"]))
             clip_prompt = base_prompt if blocks is None else blocks[min(i, len(blocks) - 1)]
@@ -2414,7 +2414,7 @@ def _project_latent(project_dir, n_clips):
         latent_path, _ = _clip_paths(project_dir, i)
         if not os.path.isfile(latent_path):
             return None
-        saved = torch.load(latent_path, map_location="cpu")
+        saved = torch.load(latent_path, map_location="cpu", weights_only=True)
         video, audio = saved["video"], saved["audio"]
         ctx = int(saved.get("ctx", 0)) if i > 0 else 0
         if ctx:
