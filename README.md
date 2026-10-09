@@ -66,7 +66,7 @@ that, a second run in the same session could slow down until it hung. `ffmpeg` m
 otherwise the `imageio-ffmpeg` binary (`pip install imageio-ffmpeg` into ComfyUI's Python), otherwise `ffmpeg` on
 the PATH. No other Python dependency.
 
-**Italian interface**: with ComfyUI set to Italian (Settings → Comfy → Locale) node names, descriptions and tooltips
+**Italian interface** (1.3.6): with ComfyUI set to Italian (Settings → Comfy → Locale) node names, descriptions and tooltips
 appear in Italian (`locales/it/nodeDefs.json`). Menu values (`inpaint`, `(auto from project)`…) stay in English
 because they are saved in the workflows; the Italian entries of older workflows are still accepted.
 
@@ -121,7 +121,7 @@ The example workflows reference these file names; pick your own text-encoder fil
    `source_face`) and `workflow/H3_LongTake_i2v_facerefine.json` (Image to Video + FaceRefine on the small faces).
    From 1.3.5 `workflow/H3_LongTake_upscale_latent.json`: latent upscale of a project you already rendered (see
    *H3 LongTake Stitch*).
-   `workflow/H3_LongTake_i2v_upscale_latent.json` does it all in one queue (Image to Video → Stitch → latent upscale),
+   From 1.3.6 `workflow/H3_LongTake_i2v_upscale_latent.json` does it all in one queue (Image to Video → Stitch → latent upscale),
    with the models wired without lines by *Anything Everywhere* ([cg-use-everywhere](https://github.com/chrisgoringe/cg-use-everywhere)).
 2. Put your source video in `ComfyUI/input/` and select it in `source_file`; connect your picture(s) to
    `ref_image_1..3`.

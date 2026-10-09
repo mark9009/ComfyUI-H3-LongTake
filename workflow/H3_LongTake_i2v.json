@@ -760,7 +760,7 @@
    "title": "Image -> Video: one prompt block per clip (---)",
    "properties": {
     "cnr_id": "comfyui-h3-longtake",
-    "ver": "1.3.5",
+    "ver": "1.3.6",
     "Node name for S&R": "H3LongTakeImageRender",
     "ue_properties": {
      "widget_ue_connectable": {},
@@ -1026,7 +1026,7 @@
    "title": "Refine, 2nd pass (Ctrl+M after the clips)",
    "properties": {
     "cnr_id": "comfyui-h3-longtake",
-    "ver": "1.3.5",
+    "ver": "1.3.6",
     "Node name for S&R": "H3LongTakeRefine",
     "ue_properties": {
      "widget_ue_connectable": {},
@@ -1156,7 +1156,7 @@
    "title": "STITCH (Ctrl+M): project_dir from I2V or Refine",
    "properties": {
     "cnr_id": "comfyui-h3-longtake",
-    "ver": "1.3.5",
+    "ver": "1.3.6",
     "Node name for S&R": "H3LongTakeStitch",
     "ue_properties": {
      "widget_ue_connectable": {},

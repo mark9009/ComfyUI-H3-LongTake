@@ -742,7 +742,7 @@
     },
     "Node name for S&R": "H3LongTakeImageRender",
     "cnr_id": "comfyui-h3-longtake",
-    "ver": "1.3.5"
+    "ver": "1.3.6"
    },
    "widgets_values": [
     "A slow cinematic push-in on the subject; natural light, ambient sound.\n---\nThe subject turns and walks away from the camera.",
@@ -901,7 +901,7 @@
     },
     "Node name for S&R": "H3LongTakeStitch",
     "cnr_id": "comfyui-h3-longtake",
-    "ver": "1.3.5"
+    "ver": "1.3.6"
    },
    "widgets_values": [
     "longtake_i2v",
