@@ -152,6 +152,10 @@
       "source_face": {
         "name": "source_face",
         "tooltip": "Cambio personaggio: cosa fare del volto della persona nella fetta di <Video 1>. blur_keep_mouth: sfocato tranne la bocca, l'identita' viene solo da <Picture 1> e il labiale resta (misurato: somiglianza al personaggio 0,41 -> 0,52, labiale 0,63 -> 0,55). blur: sfoca tutto, identita' uguale ma la bocca resta ferma (per balli e gesti). Serve insightface; ~1 s ogni 3 frame su CPU. Il risultato si vede in clip_NNN_ref.mp4."
+      },
+      "memory_mode": {
+        "name": "memory_mode",
+        "tooltip": "auto: libera la VRAM fra una clip e l'altra (e prima di ogni fase pesante sui ComfyUI con comfy-aimdo). aggressive: la libera prima di ogni fase su qualsiasi ComfyUI (riferimenti, testo, DiT, decodifica) e passa ogni volta il garbage collector di Python; un po' piu' lento, per i lavori lunghi che vanno in out-of-memory alla seconda clip."
       }
     },
     "outputs": {
@@ -303,6 +307,22 @@
       "object_image": {
         "name": "object_image",
         "tooltip": "Un oggetto da tenere uguale in tutte le clip (es. il boccale con il suo logo), come ultimo riferimento <Picture N>: il logo nitido su fondo piatto aiuta H3 a non reinventarlo nei primi piani. Richiede il ref2va."
+      },
+      "song": {
+        "name": "song",
+        "tooltip": "Una canzone per tutto il video (collega il brano intero): il nodo la codifica una volta e ogni clip riceve la sua finestra. Lo Stitch poi monta la canzone originale (song.wav nel progetto). Per 'both'/'reference' serve il ref2va."
+      },
+      "song_mode": {
+        "name": "song_mode",
+        "tooltip": "both: l'audio nuovo della clip come <Audio 1> E tutta la finestra della clip come audio guida dal fotogramma 0. Misurato su una base a 100 BPM: quota del movimento sul battito 0,49-0,52 su 15 s (0,10 senza audio su una clip). reference: solo <Audio 1>. guide: solo la guida."
+      },
+      "song_start_seconds": {
+        "name": "song_start_seconds",
+        "tooltip": "Da che secondo della canzone parte il video."
+      },
+      "memory_mode": {
+        "name": "memory_mode",
+        "tooltip": "auto: libera la VRAM fra una clip e l'altra (e prima di ogni fase pesante sui ComfyUI con comfy-aimdo). aggressive: la libera prima di ogni fase su qualsiasi ComfyUI (riferimenti, testo, DiT, decodifica) e passa ogni volta il garbage collector di Python; un po' piu' lento, per i lavori lunghi che vanno in out-of-memory alla seconda clip."
       }
     },
     "outputs": {
@@ -401,6 +421,10 @@
       "upscale": {
         "name": "upscale",
         "tooltip": "latent_model: ingrandisce il latente con l'upscaler H3 (Comfyui_Minimax_h3_latent_Upscaler + minimax_h3_latent_upscaler_3d in models/latent_upscale_models), senza passare dal VAE: piu' veloce e molto piu' dettaglio. Se manca, o con frames_from = mp4, o con una tela piu' piccola della sorgente, usa pixel. pixel: decodifica, lanczos, ricodifica (il metodo di prima)."
+      },
+      "anchor": {
+        "name": "anchor",
+        "tooltip": "previous: i fotogrammi di contesto di ogni clip sono la coda GIA' rifinita della clip precedente, protetta dalla maschera, cosi' le clip rifinite proseguono l'una dall'altra (misurato: salto al giunto 1,3x -> 0,9x a 1 MP, stessa nitidezza; guadagno piccolo). none: ogni clip rifinita da sola (prima della 1.4)."
       }
     },
     "outputs": {

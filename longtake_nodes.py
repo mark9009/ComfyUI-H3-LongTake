@@ -26,6 +26,7 @@ import os
 import re
 import shutil
 import subprocess
+import wave
 
 import torch
 
@@ -490,6 +491,20 @@ def _aimdo_on():
         return False
 
 
+MEMORY_MODES = ["auto", "aggressive"]
+MEMORY_TOOLTIP = ("auto: frees VRAM between clips (and before every heavy phase on ComfyUI with comfy-aimdo). "
+                  "aggressive: frees it before every phase on any ComfyUI (reference encode, text encode, DiT, decode) "
+                  "and runs Python's garbage collector each time; a little slower, for long runs that hit "
+                  "out-of-memory in the second clip.")
+
+
+def _free_vram():
+    """Models out of VRAM, Python garbage collected, CUDA cache emptied (empty_cache + ipc_collect)."""
+    gc.collect()
+    comfy.model_management.unload_all_models()
+    comfy.model_management.soft_empty_cache()
+
+
 class _TensorSource:
     def __init__(self, frames, fps, audio=None, start_seconds=0.0, end_seconds=0.0):
         self.frames = frames
@@ -564,6 +579,30 @@ def _encode_ref_audio(audio_vae, audio):
         waveform = torchaudio.functional.resample(waveform, sr, vae_sr)
     z = audio_vae.encode(waveform[:1].movedim(1, -1))
     return z, z.shape[-1]
+
+
+SONG_MODES = ["both", "reference", "guide"]
+SONG_FILE = "song.wav"
+
+
+def _song_piece(song, start_s, seconds):
+    """The [start_s, start_s + seconds) window of the song as AUDIO; silence past the end of the song."""
+    wave = song["waveform"][:1]
+    sr = int(song["sample_rate"])
+    a = max(0, int(round(start_s * sr)))
+    n = max(1, int(round(seconds * sr)))
+    piece = wave[..., a:a + n]
+    if piece.shape[-1] < n:
+        piece = torch.nn.functional.pad(piece, (0, n - piece.shape[-1]))
+    return {"waveform": piece.contiguous(), "sample_rate": sr}
+
+
+def _write_wav(path, audio):
+    w = audio["waveform"][0].to(torch.float32).clamp(-1, 1)          # [C, L]
+    pcm = (w.T.contiguous().cpu().numpy() * 32767.0).astype("<i2")
+    with wave.open(path, "wb") as f:
+        f.setnchannels(int(w.shape[0])); f.setsampwidth(2); f.setframerate(int(audio["sample_rate"]))
+        f.writeframes(pcm.tobytes())
 
 
 def _empty_av_latent(width, height, frames):
@@ -1203,6 +1242,7 @@ class H3LongTakeRender:
                                            "0.63 -> 0.55). blur: blurs everything, same identity but the mouth stays still "
                                            "(dances, gestures). Helps when the source person's identity leaks into the result. "
                                            "Needs insightface; ~1 s per 3 frames on CPU. See clip_NNN_ref.mp4 for what the model got."}),
+                "memory_mode": (MEMORY_MODES, {"default": "auto", "tooltip": MEMORY_TOOLTIP}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1242,8 +1282,9 @@ class H3LongTakeRender:
                ref_image_size="match", ref_video_size="match", audio_context=True, chunk_crf=10,
                aspect="source", megapixels=0.5, prompt_text=None, start_seconds=0.0, end_seconds=0.0,
                anchor_mode="keyframe", source_role="reference", seam_match="off",
-               text_cond=None, source_face="keep", api_prompt=None, extra_pnginfo=None):
+               text_cond=None, source_face="keep", memory_mode="auto", api_prompt=None, extra_pnginfo=None):
         source_file = MENU_ALIASES.get(source_file, source_file)
+        aggressive = memory_mode == "aggressive"
 
         if source_role not in SOURCE_ROLES:
             raise ValueError(f"H3 LongTake: unknown source_role: {source_role}")
@@ -1434,11 +1475,10 @@ class H3LongTakeRender:
             length, start, ctx, new = c["length"], c["src_start"], c["ctx"], c["new"]
             print(f"[H3 LongTake] clip {i + 1}/{len(clips)}: source {start}..{start + length - 1}, "
                   f"{length} frames, new {new}")
-            if _aimdo_on():
+            if _aimdo_on() or aggressive:
                 # free VRAM before re-encoding the reference video: with aimdo a model that
                 # starts with VRAM almost full sits for minutes at 60 W (measured)
-                comfy.model_management.unload_all_models()
-                comfy.model_management.soft_empty_cache()
+                _free_vram()
 
             # video reference = source slice; also written to disk to verify what
             # the model actually saw (clip_NNN_ref.mp4)
@@ -1502,9 +1542,8 @@ class H3LongTakeRender:
                                                           "minimax_token_tags": text_cond["text_token_tags"]}]]
             else:
                 # with aimdo from the first clip too (see _aimdo_on); without it, as before
-                if i > 0 or _aimdo_on():
-                    comfy.model_management.unload_all_models()
-                    comfy.model_management.soft_empty_cache()
+                if i > 0 or _aimdo_on() or aggressive:
+                    _free_vram()
                 tokens = clip.tokenize(prompt, minimax_ref_items=ref_items)
                 positive = clip.encode_from_tokens_scheduled(tokens)
                 positive = node_helpers.conditioning_set_values(positive, {"minimax_refs": ref_blocks})
@@ -1552,11 +1591,10 @@ class H3LongTakeRender:
                   f", video anchors {sum(1 for k in kf if k.get('latent') is not None) - n_guide}"
                   f" / audio {sum(1 for k in kf if k.get('audio_latent') is not None)}"
                   f"{', inpaint mask' if noise_mask is not None else ''}, seed {int(seed) + i}")
-            if _aimdo_on():
+            if _aimdo_on() or aggressive:
                 # Qwen and VAE out of VRAM before the DiT: with aimdo H3 sometimes loads up to
                 # 15.4 GB of 16 and sits for minutes at 60 W before the first step (measured)
-                comfy.model_management.unload_all_models()
-                comfy.model_management.soft_empty_cache()
+                _free_vram()
             samples = _sample(model, positive, latent, int(seed) + i, sampler_name, scheduler, steps,
                               noise_mask=noise_mask)
             video_lat, audio_lat = _split_av(samples)
@@ -1770,6 +1808,16 @@ class H3LongTakeImageRender:
                                                       "as the last <Picture N> reference: a sharp logo on a flat background "
                                                       "helps H3 not to reinvent it in close-ups. Experimental, not measured. "
                                                       "Needs the ref2va."}),
+                "song": ("AUDIO", {"tooltip": "A song for the whole video (connect the full track): the node encodes it once and "
+                                              "every clip gets its own window. The Stitch then assembles the original song "
+                                              "(song.wav in the project). Needs the ref2va for 'both'/'reference'."}),
+                "song_mode": (SONG_MODES, {"default": "both",
+                              "tooltip": "both: the clip's new audio as <Audio 1> AND the clip's whole window as audio guide from "
+                                         "frame 0. Measured on a 100 BPM beat: share of the motion on the beat 0.49-0.52 over 15 s "
+                                         "(0.10 without audio on a single clip). reference: only <Audio 1>. guide: only the guide."}),
+                "song_start_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 36000.0, "step": 0.1,
+                                       "tooltip": "Where in the song the video starts."}),
+                "memory_mode": (MEMORY_MODES, {"default": "auto", "tooltip": MEMORY_TOOLTIP}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -1792,7 +1840,9 @@ class H3LongTakeImageRender:
                prompt_text=None, aspect="source", megapixels=0.5,
                anchor_mode="inpaint", audio_context=True, seam_match="color", chunk_crf=10,
                reference_strength=1.0, master_shot_context=False, detail=0.0, seam_fade=False,
-               object_image=None, api_prompt=None, extra_pnginfo=None):
+               object_image=None, song=None, song_mode="both", song_start_seconds=0.0,
+               memory_mode="auto", api_prompt=None, extra_pnginfo=None):
+        aggressive = memory_mode == "aggressive"
 
         if not (torch.is_tensor(start_image) and start_image.ndim == 4):
             raise ValueError("H3 LongTake I2V: connect start_image.")
@@ -1819,6 +1869,8 @@ class H3LongTakeImageRender:
             f"reference_strength={float(reference_strength):g}, "
             f"master_shot_context={bool(master_shot_context)}, detail={float(detail):g}, "
             f"end_image={'yes' if end_image is not None else 'no'}",
+            (f"song: {song_mode} from {float(song_start_seconds):.1f}s, each clip gets its slice; the Stitch uses {SONG_FILE}"
+             if song is not None else "song: none"),
             f"{len(blocks)} prompt blocks for {len(clips)} clips"
             + (f" (the last one repeats from clip {len(blocks)})" if len(blocks) < len(clips) else "")
             + (f" (WARNING: {len(blocks) - len(clips)} extra blocks ignored)" if len(blocks) > len(clips) else ""),
@@ -1840,6 +1892,12 @@ class H3LongTakeImageRender:
             "clip_frames": plan["clip_frames"], "context_frames": C, "n24": n24,
             "source": f"start_image {src_w}x{src_h}", "overlap": C, "source_role": "none",
         }
+        song_video = None
+        if song is not None:
+            # the song over the whole video goes into the plan signature: another song never reuses old clips
+            song_video = _song_piece(song, float(song_start_seconds), n24 / FPS)
+            digest = hashlib.sha1(song_video["waveform"].to(torch.float32).cpu().numpy().tobytes()).hexdigest()[:12]
+            signature["song"] = f"{song_mode}:{float(song_start_seconds):.2f}:{digest}"
         previous = _load_plan(project_dir)
         if mode == "restart":
             removed = _delete_clips_from(project_dir, 0)
@@ -1872,7 +1930,15 @@ class H3LongTakeImageRender:
             "steps": int(steps), "sampler": sampler_name, "scheduler": scheduler, "plan": plan,
             "source_offset_seconds": 0.0, "source_path": None, "prompts": blocks,
             "anchor_mode": anchor_mode, "audio_context": bool(audio_context),
+            "song_path": SONG_FILE if song is not None else None,
         })
+        z_song_all = None
+        if song_video is not None:
+            _write_wav(os.path.join(project_dir, SONG_FILE), song_video)
+            # one pass over the whole song: the audio encoder keeps its context across clip boundaries
+            # (idea from LongForge's source audio encoder); each clip then takes its window of the latent.
+            # Measured: 0.49-0.52 of the motion on the beat against 0.33-0.38 with every slice encoded on its own.
+            z_song_all = _encode_ref_audio(audio_vae, song_video)[0].cpu()
 
         # --- images: keyframe and identity reference, encoded once ----------------
         # first frame: stretched onto the canvas as the core node does (geometry anchor)
@@ -1951,9 +2017,8 @@ class H3LongTakeImageRender:
             n_img_kf = len(keyframes)
 
             # with aimdo from the first clip too (see _aimdo_on); without it, as before
-            if i > 0 or _aimdo_on():
-                comfy.model_management.unload_all_models()
-                comfy.model_management.soft_empty_cache()
+            if i > 0 or _aimdo_on() or aggressive:
+                _free_vram()
 
             # <Video 1>: clip 0 as a memory of the place, from clip 1 on. Built here and not earlier because
             # clip 0 does not exist before it is rendered; once, then reused for every later clip.
@@ -1985,6 +2050,31 @@ class H3LongTakeImageRender:
                     clip_blocks = clip_blocks + [master_block]
                     clip_prefix = clip_prefix + "The place is the one shown in <Video 1>. "
 
+            song_guide = None
+            if song is not None:
+                # audio latent indices of this clip (40 per second, the clip's own time in the video)
+                a0 = audio_t_for_frames(c["src_start"])
+                a_new = audio_t_for_frames(c["src_start"] + ctx)
+                a_end = a0 + audio_t_for_frames(length)
+
+                def song_window(a, b):
+                    w = z_song_all[..., a:b]
+                    return torch.nn.functional.pad(w, (0, (b - a) - w.shape[-1])) if w.shape[-1] < b - a else w.clone()
+                if song_mode in ("both", "reference"):
+                    # <Audio 1> is only the audio of the clip's new frames: the context frames already carry the
+                    # previous clip's audio (LongForge does the same)
+                    r0 = a_new if ctx > 0 else a0
+                    if (a_end - r0) / AUDIO_HZ >= MIN_REF_AUDIO_SECONDS:
+                        z_ref_song = song_window(r0, a_end)
+                        clip_items = clip_items + [{"type": "audio"}]
+                        clip_blocks = clip_blocks + [{"kind": "audio", "ref_audio_t": int(z_ref_song.shape[-1]),
+                                                      "audio_latent": z_ref_song}]
+                        clip_prefix = clip_prefix + "The music is the song heard in <Audio 1>. "
+                    else:
+                        _LOG.warning("H3 LongTake I2V: clip %d, song window too short for <Audio 1>, guide only.", i)
+                if song_mode in ("both", "guide"):
+                    song_guide = song_window(a0, a_end)
+
             prompt = clip_prefix + blocks[min(i, len(blocks) - 1)]
             print(f"[H3 LongTake I2V] clip {i + 1}/{len(clips)}: {length} frames, new {new} | {prompt[:80]}")
             tokens = clip.tokenize(prompt, images=images_for_clip, minimax_ref_items=list(clip_items))
@@ -2014,6 +2104,10 @@ class H3LongTakeImageRender:
                     keyframes += motion_context_keyframes(prev_video, prev_audio, C, target_video, bool(audio_context), "head")
                 if nxt is not None:
                     keyframes += tail_context_keyframes(nxt["video"], nxt["audio"], C, target_video, bool(audio_context), "head")
+            if song_guide is not None:
+                # audio guide from the clip's frame 0, cut to the latent's audio track (as MiniMaxH3AddGuide does)
+                audio_t = _split_av(latent["samples"])[1].shape[-1]
+                keyframes.append({"resolved_frame_index": 0, "audio_latent": song_guide[..., :audio_t].clone()})
             if keyframes:
                 positive = node_helpers.conditioning_set_values(positive, {"minimax_keyframes": keyframes})
             del nxt
@@ -2023,11 +2117,10 @@ class H3LongTakeImageRender:
                   f"video anchors {sum(1 for k in keyframes if k.get('latent') is not None) - n_img_kf}"
                   f" / audio {sum(1 for k in keyframes if k.get('audio_latent') is not None)}"
                   f"{', inpaint mask' if noise_mask is not None else ''}, seed {int(seed) + i}")
-            if _aimdo_on():
+            if _aimdo_on() or aggressive:
                 # Qwen and VAE out of VRAM before the DiT: with aimdo H3 sometimes loads up to
                 # 15.4 GB of 16 and sits for minutes at 60 W before the first step (measured)
-                comfy.model_management.unload_all_models()
-                comfy.model_management.soft_empty_cache()
+                _free_vram()
             samples = _sample(model, positive, latent, int(seed) + i, sampler_name, scheduler, steps,
                               noise_mask=noise_mask)
             video_lat, audio_lat = _split_av(samples)
@@ -2201,6 +2294,10 @@ class H3LongTakeRefine:
                                        "minimax_h3_latent_upscaler_3d in models/latent_upscale_models), without going through the VAE: "
                                        "faster and much more detail. When it is missing, with frames_from = mp4, or with a canvas "
                                        "smaller than the source, pixel is used. pixel: decode, lanczos, re-encode (the old method)."}),
+                "anchor": (["previous", "none"], {"default": "previous",
+                           "tooltip": "previous: the context frames of every clip are the previous clip's ALREADY refined tail, kept "
+                                      "by the mask, so refined clips continue from each other (measured: join jump 1.3x -> 0.9x at "
+                                      "1 MP, same sharpness; a small gain). none: every clip is refined on its own (before 1.4)."}),
             },
             "hidden": {"api_prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
         }
@@ -2220,7 +2317,7 @@ class H3LongTakeRefine:
 
     def refine(self, model, clip, vae, project_name, megapixels, denoise, steps, seed, sampler_name, scheduler,
                prompt, mode, max_clips, dry_run, ref_image_1=None, face_image=None, character_sheet=None,
-               chunk_crf=10, project_dir=None, detail=0.0, frames_from="latent", upscale="latent_model",
+               chunk_crf=10, project_dir=None, detail=0.0, frames_from="latent", upscale="latent_model", anchor="previous",
                api_prompt=None, extra_pnginfo=None):
         if isinstance(project_dir, str) and not project_dir.strip():
             # project_dir linked but empty: the Render is in dry run. Do not fall back to project_name (another project).
@@ -2355,6 +2452,22 @@ class H3LongTakeRefine:
             # audio is untouched: zero mask (preserved) on the audio branch
             vmask = torch.ones(1, 1, *z_up.shape[2:], dtype=torch.float32)
             amask = torch.zeros(1, 1, *audio_lat.shape[2:], dtype=torch.float32)
+            prev_hr = _clip_paths(out_dir, i - 1)[0] if i > 0 else None
+            if anchor == "previous" and ctx and prev_hr and os.path.isfile(prev_hr):
+                # the context frames = the previous clip's refined tail, protected: refined clips continue from each other
+                # (like the inpaint anchor of the first pass; idea from bbaudio's MMH3 Ultimate Upscale chunk anchor)
+                prev_v = torch.load(prev_hr, map_location="cpu", weights_only=True)["video"]
+                steps = latent_steps_for_frames(ctx)
+                if (steps and tuple(prev_v.shape[3:]) == tuple(z_up.shape[3:]) and steps <= prev_v.shape[2]
+                        and (int(prev_v.shape[2]) - steps) % 5 == 0):
+                    z_up = z_up.clone()
+                    z_up[:, :, :steps] = prev_v[:1, :, -steps:].to(z_up)
+                    vmask[:, :, :steps] = 0.0
+                    latent = {"samples": comfy.nested_tensor.NestedTensor((z_up.to(comfy.model_management.intermediate_device()),
+                                                                           audio_lat.to(comfy.model_management.intermediate_device())))}
+                else:
+                    _LOG.warning("H3 LongTake Refine: clip %d not anchored (latent phase or size differs).", i)
+                del prev_v
             noise_mask = comfy.nested_tensor.NestedTensor((vmask, amask))
 
             # 2) text conditioning (+ reference) and partial denoise
@@ -2519,7 +2632,16 @@ class H3LongTakeStitch:
         i2v_project = ((plan or {}).get("signature") or {}).get("engine") == I2V_ENGINE
         if audio_file in (AUDIO_AUTO, NO_FILE, "", None):
             # NO_FILE: workflows saved with the previous version
-            if source_audio is None and i2v_project:
+            song_path = None
+            if (plan or {}).get("song_path"):
+                # the original song, already cut to the video; a refined project (<project>/hr) uses its source's
+                for folder in (project_dir, ((plan or {}).get("signature") or {}).get("refined_from") or ""):
+                    if folder and os.path.isfile(os.path.join(folder, plan["song_path"])):
+                        song_path = os.path.join(folder, plan["song_path"])
+                        break
+            if source_audio is None and i2v_project and song_path:
+                audio_path = song_path
+            elif source_audio is None and i2v_project:
                 # image-to-video project: the audio is the one H3 generated, already inside each chunk
                 audio_args = list(CLIP_AUDIO_ARGS)
                 audio_note = "audio generated by H3 (from the chunks)"

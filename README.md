@@ -91,6 +91,14 @@ because they are saved in the workflows; the Italian entries of older workflows 
 - **An older workflow shows odd values in `source_face` or the Refine's `detail`**: ComfyUI stores widget values by
   position, so workflows saved before those inputs existed carry a neighbouring value there. From 1.3.4 the nodes
   accept it (`keep` / 0, noted in the report); re-save the workflow to clean it up.
+- **Out-of-memory in the second clip** (often during text encoding, with little memory "allocated" but a lot
+  "reserved"): the nodes already free VRAM between clips (models unloaded, `empty_cache` + `ipc_collect`). From 1.4,
+  `memory_mode = aggressive` on Render / Image to Video frees it before **every** phase (references, text, DiT,
+  decode) on any ComfyUI and runs Python's garbage collector each time. If it persists, the reserved memory is
+  fragmented: start ComfyUI with `--disable-cuda-malloc` and the environment variable
+  `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, and prefer the NVFP4 text encoder (~16 GB) to int8 (~26 GB).
+  At high resolution the reference video also goes through the text encoder: a smaller `ref_video_size` /
+  `megapixels` for the first pass, then the Refine, keeps it light.
 
 ### Models
 
@@ -286,7 +294,23 @@ the preview and the Stitch concatenate it.
 | `object_image` | experimental, not measured: an object to keep the same in every clip (e.g. a mug with its logo) as the last `<Picture N>`, with a sentence that names it; a sharp logo on a flat background (ref2va) |
 | `reference_strength`, `master_shot_context`, `detail`, `seam_fade` | measured, **no gain** over run-to-run noise: kept at their neutral defaults (1.0 / off / 0 / off) so workflows that set them still load. `reference_strength` mixes the references towards noise; `master_shot_context` passes clip 0 as `<Video 1>` (doubles the time per step); `detail` is the Detail Daemon timestep shift (4-8 turbo steps touch too few sigmas); `seam_fade` is a 12 ms audio ramp at the joins (with `audio_context` there is no click to remove) |
 | `anchor_mode` | `inpaint` (default from 1.3.5): the previous clip's tail is copied into the latent and protected by the mask, the model does not redraw it — clean joins (see *Troubleshooting*: 5.4-6.8x → 1.5-1.7x). `keyframe`: the tail as a guide, redrawn by the model. `none`: independent clips |
+| `song` / `song_mode` / `song_start_seconds` | **a song for the whole video** (1.4, ref2va): connect the full track; see *Image to Video on a song* below |
+| `memory_mode` | `auto` (default) or `aggressive`: see *Troubleshooting* (out-of-memory in the second clip) |
 | the rest | as the Render (`context_frames`, `seam_match`, `mode`, `redo_from_clip`, `max_clips`, `dry_run`, `chunk_crf`) |
+
+**Image to Video on a song** (1.4). Connect a *Load Audio* with the whole song to `song` (ref2va model): the node
+encodes the song **once** (the audio encoder keeps its context across clip boundaries) and gives every clip its
+own window. With `song_mode = both` (default) the clip's **new** audio goes in as `<Audio 1>` — the context frames
+already carry the previous clip's audio — and the clip's whole window goes in as an **audio guide** from frame 0.
+The node prepends *"The music is the song heard in <Audio 1>."* to every block: in the blocks, ask for movement on
+the beat. `song_start_seconds` picks where in the song the video starts. The song is saved as `song.wav` in the
+project and the Stitch assembles **the original song** instead of the regenerated audio (also for the Refine's
+`/hr` project). Changing the song or its start is a different plan: use `mode = restart` or a new project.
+Measured on a 100 BPM beat, 15 s = 3 clips, 2 seeds, share of the motion that falls on the beat (1.67 Hz and its
+double; chance is about 0.2): **0.49-0.52** with this method, 0.33-0.38 with every clip's slice encoded on its own,
+0.10 on one clip without audio. Joins unchanged (1.5x at most). Lip sync on a sung track is **not** reliable: the
+model reproduces the song but the lips follow it loosely. Ideas from LongForge (whole-file audio encoding,
+reference on the new frames only). Workflow: `workflow/H3_LongTake_i2v_song.json`.
 
 Workflow: `workflow/H3_LongTake_i2v.json` (Refine and Stitch muted, Ctrl+M to enable them). Every shipped workflow
 carries a README note inside the graph with the setup, the steps and the measured defaults.
@@ -342,7 +366,7 @@ protected by the mask). The `hr` folder has its own `plan.json`: the Stitch asse
 | `project_name` / `project_dir` | source project (or the `project_dir` output of the Render / Image to Video) |
 | `megapixels` | second-pass canvas, same aspect (1.0 MP = 864×1184 from 608×832) |
 | `denoise` | **0.25** recommended: adds detail while keeping content and motion; 0.4 regenerates more (same identity); beyond that the scene changes |
-| `steps` | second-pass steps (schedule over `steps/denoise`, the tail is used: 4 steps at 0.25 → sigmas 0.80 → 0.45 → 0) |
+| `steps` | second-pass steps (schedule over `steps/denoise`, the tail is used: 4 steps at 0.25 → sigmas 0.80 → 0.45 → 0). Keep **4** or more: with 1 step the model removes all the added noise in a single jump and thin structures (fingers) come out softer than in the first pass |
 | `prompt` | empty: Image to Video projects use their per-clip blocks, otherwise a generic quality prompt |
 | `ref_image_1` | `<Picture 1>`: puts (or restores) the identity even on a project generated without it |
 | `face_image` | a close-up of the face as `<Picture 2>` (or `<Picture 1>` alone): the second pass **restores the picture's face on the whole video**, even where the first pass lost it |
@@ -350,6 +374,7 @@ protected by the mask). The `hr` folder has its own `plan.json`: the Stitch asse
 | `upscale` | `latent_model` (default, 1.3.0): the H3 latent upscaler, without going through the VAE. Needs the [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) pack and `minimax_h3_latent_upscaler_3d_fp16.safetensors` in `models/latent_upscale_models`. Without them, with `frames_from = mp4` or with a canvas smaller than the source it uses `pixel` (decode, lanczos, re-encode); the report says which one ran |
 | `detail` | Detail Daemon timestep shift: measured, no gain with 4-8 turbo steps; leave it at 0 |
 | `frames_from` | `latent` (default) or `mp4`: with `mp4` the clip's new frames are read from its `clip_XXX.mp4` chunk instead of the latent, to refine chunks you edited in pixels (a face fix, a colour grade); the context frames stay from the latent |
+| `anchor` | `previous` (default, 1.4): every clip's context frames are the previous clip's **already refined** tail, protected by the mask, so the refined clips continue from each other instead of each being refined on its own. Measured at 1 MP (one project, one seed): join jump 1.3x → 0.9x on one join, the other unchanged, same sharpness — a small gain at no cost. `none`: the behaviour before 1.4 |
 
 Latent upscaler against `pixel` (416×608 → 832×1216, denoise 0.4 / 4 steps, same references and seed): **253 s
 against 375 s** per clip, face sharpness **222 against 85** (grain 5.5 against 4.0), identity 0.838 against
